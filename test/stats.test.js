@@ -13,6 +13,12 @@ import {
   formatTime,
   hourLabel,
   periodLabel,
+  periodKey,
+  weekdayPeriodGrid,
+  yearGrid,
+  weekSummary,
+  shortDate,
+  PERIODS,
 } from '../src/stats.js';
 
 // 全部用本機時間建構，測試不依賴時區。
@@ -146,4 +152,73 @@ test('時段文字', () => {
   assert.equal(hourLabel(12), '中午 12 點');
   assert.equal(hourLabel(13), '下午 1 點');
   assert.equal(hourLabel(19), '晚上 7 點');
+});
+
+test('periodKey 與 PERIODS 對得上', () => {
+  assert.equal(periodKey(5), 'morning');
+  assert.equal(periodKey(12), 'noon');
+  assert.equal(periodKey(17), 'afternoon');
+  assert.equal(periodKey(21), 'evening');
+  assert.equal(periodKey(22), 'night');
+  assert.equal(periodKey(4), 'night');
+  assert.deepEqual(PERIODS.map((p) => p.key), ['morning', 'noon', 'afternoon', 'evening', 'night']);
+  assert.equal(shortDate('2026-09-05'), '9/5');
+});
+
+test('weekdayPeriodGrid', () => {
+  const g = weekdayPeriodGrid(sighs);
+  assert.equal(g.grid.length, 7);
+  assert.equal(g.grid[0].length, 5);
+  assert.equal(g.grid.flat().reduce((a, b) => a + b, 0), 5);
+  // 9/15 是週二：08:05 早上、14:10 下午
+  assert.equal(g.grid[2][0], 1);
+  assert.equal(g.grid[2][2], 1);
+  assert.equal(g.busiestWeekday, 2);
+  assert.equal(g.busiest.count, 1);
+  assert.equal(weekdayPeriodGrid([]).busiestWeekday, null);
+});
+
+test('yearGrid：53 欄 × 7 格，最後一格之後都是未來', () => {
+  const g = yearGrid(sighs, now, 53);
+  assert.equal(g.columns.length, 53);
+  assert.equal(g.columns.every((c) => c.length === 7), true);
+  const last = g.columns.at(-1);
+  assert.equal(last[2].today, true, '9/15 是週二');
+  assert.equal(last[3].future, true);
+  assert.equal(last[2].count, 2);
+  assert.equal(g.max, 2);
+  assert.equal(g.total, 5);
+  assert.equal(new Date(g.firstSunday).getDay(), 0);
+  assert.ok(g.months.length >= 12);
+  assert.equal(g.months[0].col, 0);
+});
+
+test('weekSummary：最近 7 天對比前 7 天', () => {
+  const w = weekSummary(sighs, now, label);
+  assert.equal(w.days.length, 7);
+  assert.equal(w.total, 5);
+  assert.equal(w.prevTotal, 0);
+  assert.equal(w.diff, 5);
+  assert.equal(w.rangeLabel, '9/9 – 9/15');
+  assert.deepEqual({ key: w.maxDay.key, count: w.maxDay.count }, { key: '2026-09-15', count: 2 });
+  assert.equal(w.topReason.label, '工作');
+  assert.equal(w.topReason.count, 3);
+  assert.equal(w.busiestHour, 14);
+  assert.equal(w.activeDays, 4);
+  assert.equal(w.noteCount, 0);
+  const empty = weekSummary([], now, label);
+  assert.equal(empty.maxDay, null);
+  assert.equal(empty.topReason, null);
+  assert.equal(empty.longestCalm, null);
+});
+
+test('insights：星期幾最常嘆氣', () => {
+  const many = [];
+  for (let d = 0; d < 28; d++) {
+    const t = at(2026, 8, 19 + d, 10); // 8/19 起 28 天，每天一次
+    many.push({ t, r: null });
+    if (new Date(t).getDay() === 1) many.push({ t: t + 3_600_000, r: null }, { t: t + 7_200_000, r: null }); // 週一三次
+  }
+  const lines = insights(many, now, label);
+  assert.ok(lines.some((l) => l.includes('星期一')), lines.join('\n'));
 });

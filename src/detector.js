@@ -93,25 +93,72 @@ export function classifyEvent(frames, opts = {}) {
   };
 }
 
-/** 靈敏度 0~1 → 偵測參數。愈高愈容易被判成嘆氣。 */
-export function paramsFor(sensitivity) {
+const clampNum = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+
+/**
+ * 靈敏度 0~1 → 偵測參數。愈高愈容易被判成嘆氣。
+ * 有校正結果（profile）時以它為基準，靈敏度只做小幅微調。
+ */
+export function paramsFor(sensitivity, profile = null) {
   const s = Math.min(1, Math.max(0, Number(sensitivity) || 0));
+  if (profile && Number.isFinite(profile.minFlat) && Number.isFinite(profile.riseDb)) {
+    return {
+      riseDb: clampNum(profile.riseDb + (0.5 - s) * 6, 3, 20),
+      minFlat: clampNum(profile.minFlat + (0.5 - s) * 0.08, 0.02, 0.5),
+      minDur: profile.minDur ?? 450,
+      maxDur: profile.maxDur ?? 4500,
+    };
+  }
   return {
     riseDb: 16 - 10 * s, // 超過噪音地板多少 dB 算「有聲音」：6 ~ 16 dB
     minFlat: 0.2 - 0.14 * s, // 0.06 ~ 0.2
+    minDur: 450,
+    maxDur: 4500,
+  };
+}
+
+/**
+ * 校正：使用者刻意嘆幾次氣，從這些樣本算出適合他聲音的門檻。
+ * samples: [{ meanFlat, dur, rise }]；至少要兩個合理的樣本，否則回傳 null。
+ */
+export function profileFromSamples(samples) {
+  const ok = (samples || []).filter(
+    (x) => x && Number.isFinite(x.meanFlat) && Number.isFinite(x.dur) && x.dur >= 250,
+  );
+  if (ok.length < 2) return null;
+  const minFlat = Math.min(...ok.map((x) => x.meanFlat));
+  const minDur = Math.min(...ok.map((x) => x.dur));
+  const maxDur = Math.max(...ok.map((x) => x.dur));
+  const rises = ok.map((x) => x.rise).filter((v) => Number.isFinite(v));
+  return {
+    minFlat: clampNum(minFlat * 0.7, 0.02, 0.5),
+    riseDb: rises.length ? clampNum(Math.min(...rises) * 0.5, 3, 20) : 10,
+    minDur: clampNum(minDur * 0.6, 200, 1500),
+    maxDur: clampNum(maxDur * 2, 1500, 10000),
   };
 }
 
 export class SighListener {
-  constructor({ onSigh, onLevel, onEvent, sensitivity = 0.5, interval = 40 } = {}) {
+  constructor({ onSigh, onLevel, onEvent, sensitivity = 0.5, profile = null, interval = 40 } = {}) {
     this.onSigh = onSigh;
     this.onLevel = onLevel;
     this.onEvent = onEvent;
     this.sensitivity = sensitivity;
+    this.profile = profile;
+    this.calibrating = false;
     this.interval = interval;
     this.timer = null;
     this.stream = null;
     this.ctx = null;
+  }
+
+  setProfile(profile) {
+    this.profile = profile || null;
+  }
+
+  /** 校正模式：每段聲音都當成樣本回報（type: 'sample'），不會記錄嘆氣。 */
+  setCalibrating(on) {
+    this.calibrating = !!on;
   }
 
   get running() {
@@ -157,6 +204,8 @@ export class SighListener {
     this.frames = [];
     this.lastAbove = 0;
     this.refractoryUntil = 0;
+    this.eventFloor = 0;
+    this.peakDb = -100;
 
     for (const track of this.stream.getTracks()) {
       track.addEventListener('ended', () => {
@@ -198,7 +247,8 @@ export class SighListener {
     else if (db < this.floor) this.floor += (db - this.floor) * 0.3;
     else if (this.state === 'idle') this.floor += (db - this.floor) * 0.01;
 
-    const { riseDb, minFlat } = paramsFor(this.sensitivity);
+    const params = paramsFor(this.sensitivity, this.calibrating ? null : this.profile);
+    const { riseDb, minFlat, minDur, maxDur } = params;
     const threshold = this.floor + riseDb;
     const above = db > threshold;
     const stillLoud = db > this.floor + riseDb * 0.5; // 事件延續用的較低門檻（遲滯）
@@ -211,21 +261,29 @@ export class SighListener {
         this.state = 'active';
         this.frames = [{ t: now, db, flat }];
         this.lastAbove = now;
+        this.eventFloor = this.floor;
+        this.peakDb = db;
       }
       return;
     }
 
     this.frames.push({ t: now, db, flat });
+    if (db > this.peakDb) this.peakDb = db;
     if (stillLoud) this.lastAbove = now;
 
     const hangMs = 220;
-    const tooLong = now - this.frames[0].t > 5000;
+    const tooLong = now - this.frames[0].t > Math.max(5000, maxDur + 500);
     if (now - this.lastAbove > hangMs || tooLong) {
       const cut = this.frames.filter((f) => f.t <= this.lastAbove);
-      const result = classifyEvent(cut, { minFlat });
+      const result = classifyEvent(cut, { minFlat, minDur, maxDur });
+      const rise = this.peakDb - this.eventFloor;
       this.state = 'idle';
       this.frames = [];
-      this.onEvent?.({ type: 'event', ...result });
+      if (this.calibrating) {
+        this.onEvent?.({ type: 'sample', ...result, rise });
+        return;
+      }
+      this.onEvent?.({ type: 'event', ...result, rise });
       if (result.sigh) {
         this.refractoryUntil = now + 1500;
         this.onSigh?.(result);

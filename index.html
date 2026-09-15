@@ -81,6 +81,13 @@
             <button type="button" class="link-btn" id="undo-btn" disabled>撤銷上一次</button>
             <span class="hint">或按 <kbd>空白鍵</kbd></span>
           </div>
+          <div class="breath-prompt" id="breath-prompt" hidden>
+            <p id="breath-prompt-text"></p>
+            <div class="btn-row">
+              <button type="button" class="btn btn-sm" id="breath-yes">好，呼吸一分鐘</button>
+              <button type="button" class="link-btn" id="breath-no">先不要</button>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -130,6 +137,13 @@
               <input type="range" id="mic-sens" min="0" max="1" step="0.05" value="0.5" />
             </label>
             <p class="sub mic-last" id="mic-last"></p>
+            <div class="mic-cal">
+              <div class="btn-row">
+                <button type="button" class="btn btn-sm" id="mic-cal">用我的聲音校正</button>
+                <button type="button" class="link-btn" id="mic-cal-reset" hidden>重設校正</button>
+              </div>
+              <p class="sub" id="mic-cal-status" aria-live="polite"></p>
+            </div>
           </div>
         </article>
 
@@ -161,6 +175,19 @@
           <div id="hour-chart" class="chart-box"></div>
           <p class="sub" id="hour-summary"></p>
         </article>
+        <article class="card card-year">
+          <h3>這一年</h3>
+          <div class="heat-scroll" id="year-heat"></div>
+          <div class="heat-foot">
+            <p class="sub" id="year-summary"></p>
+            <span class="heat-legend" aria-hidden="true">少 <i class="l0"></i><i class="l1"></i><i class="l2"></i><i class="l3"></i><i class="l4"></i> 多</span>
+          </div>
+        </article>
+        <article class="card card-grid">
+          <h3>星期 × 時段</h3>
+          <div class="wp-grid" id="week-period"></div>
+          <p class="sub" id="week-period-summary"></p>
+        </article>
         <article class="card card-reasons">
           <h3>為了什麼</h3>
           <ul class="reason-list" id="reason-list"></ul>
@@ -172,6 +199,27 @@
         <article class="card card-insights">
           <h3>觀察</h3>
           <ul class="insight-list" id="insight-list"></ul>
+        </article>
+        <article class="card card-report">
+          <h3>週報</h3>
+          <p class="sub">把最近 7 天做成一張圖，存下來或傳給朋友。</p>
+          <div class="btn-row report-actions">
+            <button type="button" class="btn" id="report-make">產生這週的週報</button>
+            <span class="sub" id="report-status"></span>
+          </div>
+          <div id="report-preview" hidden>
+            <img id="report-img" alt="嘆氣週報" />
+            <div class="btn-row">
+              <button type="button" class="btn btn-sm" id="report-share" hidden>分享</button>
+              <button type="button" class="btn btn-sm" id="report-save">儲存圖片</button>
+            </div>
+          </div>
+        </article>
+        <article class="card card-notes">
+          <h3>筆記</h3>
+          <input type="search" class="text-input" id="note-search" placeholder="搜尋筆記" aria-label="搜尋筆記" />
+          <p class="sub" id="note-empty"></p>
+          <ul class="note-list" id="note-list"></ul>
         </article>
       </div>
     </section>
@@ -205,6 +253,16 @@
         </div>
         <div class="setting">
           <div class="setting-text">
+            <strong>App 圖示顯示今日次數</strong>
+            <span>加到主畫面後，圖示右上角會顯示今天嘆了幾次。<em id="badge-note" hidden>這個瀏覽器不支援。</em></span>
+          </div>
+          <label class="switch" aria-label="圖示顯示今日次數">
+            <input type="checkbox" id="badge-toggle" />
+            <span class="track"></span>
+          </label>
+        </div>
+        <div class="setting">
+          <div class="setting-text">
             <strong>匯出</strong>
             <span>把全部紀錄存成檔案，換裝置或做備份用。</span>
           </div>
@@ -231,6 +289,36 @@
           <button type="button" class="btn danger" id="clear-all">清除全部</button>
         </div>
       </div>
+
+      <div class="card settings-card">
+        <h3>原因標籤</h3>
+        <div class="setting">
+          <div class="setting-text">
+            <span>用箭頭調整順序；自訂的標籤可以改名或刪除。</span>
+          </div>
+        </div>
+        <ul class="rm-list" id="reason-manage"></ul>
+        <div class="rm-add">
+          <input type="text" class="text-input" id="reason-new" maxlength="12" placeholder="新標籤，例如：房東" aria-label="新標籤名稱" />
+          <button type="button" class="btn" id="reason-add">新增</button>
+        </div>
+      </div>
+
+      <div class="card settings-card">
+        <h3>照時段自動選原因</h3>
+        <div class="setting">
+          <div class="setting-text">
+            <strong>開啟後，原因會跟著時段自動切換</strong>
+            <span>例如上班時間預設「工作」、深夜預設「沒為什麼」。你臨時手動改的會維持到下一個時段。</span>
+          </div>
+          <label class="switch" aria-label="照時段自動選原因">
+            <input type="checkbox" id="period-toggle" />
+            <span class="track"></span>
+          </label>
+        </div>
+        <div id="period-list" class="period-list" hidden></div>
+      </div>
+
       <div class="card settings-card">
         <h3>手機上更快的記錄方式</h3>
         <div class="setting">
@@ -250,10 +338,44 @@
         <div class="setting">
           <div class="setting-text">
             <strong>iPhone 請注意</strong>
-            <span>主畫面 App 和 Safari 的紀錄是分開存的。想用捷徑記錄，就把統計也放在 Safari 裡看（用書籤就好，不要加到主畫面）；想用主畫面 App，就在 App 裡按按鈕。Android 兩邊共用，沒有這個問題。</span>
+            <span>主畫面 App 和 Safari 的紀錄是分開存的。想用捷徑記錄，就把統計也放在 Safari 裡看（用書籤就好，不要加到主畫面）；想用主畫面 App，就在 App 裡按按鈕。Android 兩邊共用，沒有這個問題。開了下面的「跨裝置同步」，兩邊也會自動合成同一份。</span>
           </div>
         </div>
       </div>
+
+      <div class="card settings-card">
+        <h3>跨裝置同步</h3>
+        <div id="sync-setup">
+          <div class="setting">
+            <div class="setting-text">
+              <strong>用你自己的 GitHub 私密 Gist 當雲端</strong>
+              <span>
+                不經過任何第三方伺服器：這個 App 直接把紀錄存到你帳號下的一個私密 Gist，手機和電腦就能共用同一份。
+                需要一個只有 Gist 權限的 token：到
+                <a href="https://github.com/settings/personal-access-tokens/new" rel="noopener" target="_blank">GitHub → Fine-grained tokens</a>，
+                Account permissions 裡把 Gists 設成 Read and write，建立後貼到下面。token 只會存在這台裝置。
+              </span>
+            </div>
+          </div>
+          <div class="rm-add">
+            <input type="password" class="text-input" id="sync-token" placeholder="github_pat_…" autocomplete="off" aria-label="GitHub token" />
+            <button type="button" class="btn" id="sync-connect">連線</button>
+          </div>
+        </div>
+        <div id="sync-connected" hidden>
+          <div class="setting">
+            <div class="setting-text">
+              <strong>已連線</strong>
+              <span id="sync-status"></span>
+            </div>
+            <div class="btn-row">
+              <button type="button" class="btn btn-sm" id="sync-now">立即同步</button>
+              <button type="button" class="btn btn-sm danger" id="sync-disconnect">移除 token</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <div class="about">
         <p>
           「唉」是一個很小的網頁程式。所有紀錄都存在你這台裝置的瀏覽器裡，沒有帳號、沒有伺服器、沒有追蹤。
@@ -271,7 +393,32 @@
     <a href="https://github.com/chung223/ah" rel="noopener">GitHub</a>
   </footer>
 
-  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <!-- 快速記錄的確認畫面 -->
+  <div class="overlay" id="quick-overlay" hidden>
+    <div class="quick-card">
+      <p class="quick-title">記錄了</p>
+      <p class="quick-count-wrap"><span class="sub">今天第</span> <span class="quick-count" id="quick-count">1</span> <span class="sub">次</span></p>
+      <div class="btn-row">
+        <button type="button" class="btn" id="quick-undo">撤銷</button>
+        <button type="button" class="btn" id="quick-close">關閉</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 深呼吸 -->
+  <div class="overlay" id="breath-overlay" hidden role="dialog" aria-label="深呼吸引導">
+    <div class="breath-stage">
+      <div class="breath-circle" id="breath-circle" aria-hidden="true"></div>
+      <p class="breath-phase" id="breath-phase" aria-live="polite">準備</p>
+      <p class="sub" id="breath-cycle"></p>
+      <button type="button" class="btn btn-sm" id="breath-stop">結束</button>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" role="status" aria-live="polite">
+    <span id="toast-text"></span>
+    <span class="toast-actions" id="toast-actions"></span>
+  </div>
   <noscript><p class="noscript">這個計數器需要 JavaScript 才能運作。</p></noscript>
 
   <script type="module" src="./src/app.js"></script>

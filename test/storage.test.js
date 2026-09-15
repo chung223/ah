@@ -8,6 +8,7 @@ import {
   parseImport,
   toCSV,
   exportJSON,
+  cleanNote,
   STORAGE_KEY,
 } from '../src/storage.js';
 
@@ -36,12 +37,14 @@ test('save / load 來回，會排序並正規化', () => {
   const store = createStore(s);
   const state = defaultState();
   state.sighs = [
-    { t: 300, r: 'work' },
+    { t: 300, r: 'work', n: '  客戶又改  需求 ' },
     { t: 100, r: 'bogus' },
     { t: 200, r: null, a: true },
   ];
+  state.deleted = [50, 50, 'x', 10];
   state.settings.theme = 'light';
   state.settings.sound = true;
+  state.settings.badge = false;
   state.settings.sensitivity = 0.8;
   state.settings.reason = 'money';
   assert.equal(store.save(state), true);
@@ -53,20 +56,69 @@ test('save / load 來回，會排序並正規化', () => {
   );
   assert.equal(loaded.sighs[0].r, null, '未知的原因代號變成 null');
   assert.equal(loaded.sighs[1].a, 1);
-  assert.equal(loaded.sighs[2].a, undefined);
-  assert.deepEqual(loaded.settings, { theme: 'light', sound: true, sensitivity: 0.8, reason: 'money' });
+  assert.equal(loaded.sighs[2].n, '客戶又改 需求');
+  assert.deepEqual(loaded.deleted, [10, 50]);
+  assert.equal(loaded.settings.theme, 'light');
+  assert.equal(loaded.settings.sound, true);
+  assert.equal(loaded.settings.badge, false);
+  assert.equal(loaded.settings.sensitivity, 0.8);
+  assert.equal(loaded.settings.reason, 'money');
 
   store.clear();
   assert.deepEqual(store.load(), defaultState());
 });
 
+test('舊版（v1）資料載入後補上新欄位', () => {
+  const st = normalizeState({ v: 1, sighs: [{ t: 5, r: 'work' }], settings: { theme: 'dark' } });
+  assert.equal(st.v, 2);
+  assert.deepEqual(st.deleted, []);
+  assert.equal(st.settings.badge, true);
+  assert.equal(st.settings.reasonMode, 'manual');
+  assert.deepEqual(st.settings.customReasons, []);
+  assert.equal(st.settings.reasonOrder, null);
+  assert.equal(st.settings.micProfile, null);
+  assert.equal(st.settings.sync, null);
+  assert.deepEqual(Object.keys(st.settings.periodReasons), ['morning', 'noon', 'afternoon', 'evening', 'night']);
+});
+
 test('normalizeState 丟掉不合法的紀錄與設定', () => {
   const st = normalizeState({
     sighs: [null, 'x', { t: 'abc' }, { t: -5 }, { t: 12.6, r: 'love' }],
-    settings: { theme: 'neon', sound: 'yes', sensitivity: 9, reason: 'nope' },
+    settings: { theme: 'neon', sound: 'yes', sensitivity: 9, reason: 'nope', reasonMode: 'x' },
   });
   assert.deepEqual(st.sighs, [{ t: 13, r: 'love' }]);
-  assert.deepEqual(st.settings, { theme: 'auto', sound: false, sensitivity: 1, reason: null });
+  assert.equal(st.settings.theme, 'auto');
+  assert.equal(st.settings.sound, false);
+  assert.equal(st.settings.sensitivity, 1);
+  assert.equal(st.settings.reason, null);
+  assert.equal(st.settings.reasonMode, 'manual');
+});
+
+test('自訂標籤、時段、校正、同步設定的正規化', () => {
+  const st = normalizeState({
+    sighs: [{ t: 1, r: 'c_abcd12' }],
+    settings: {
+      customReasons: [{ id: 'c_abcd12', label: ' 房東 ' }, { id: 'bad', label: 'x' }, { id: 'c_abcd12', label: '重複' }],
+      reasonOrder: ['c_abcd12', 'work', 'nope', 'c_zzzz99'],
+      reason: 'c_zzzz99',
+      reasonMode: 'period',
+      periodReasons: { morning: 'work', night: 'c_abcd12', bogus: 'work' },
+      micProfile: { minFlat: 0.1, riseDb: 8, minDur: 300 },
+      sync: { token: ' tok ', gistId: 'abc', lastSync: 123 },
+    },
+  });
+  assert.deepEqual(st.settings.customReasons, [{ id: 'c_abcd12', label: '房東' }]);
+  assert.deepEqual(st.settings.reasonOrder, ['c_abcd12', 'work']);
+  assert.equal(st.settings.reason, null, '指到不存在的自訂標籤 → null');
+  assert.equal(st.settings.reasonMode, 'period');
+  assert.deepEqual(st.settings.periodReasons, { morning: 'work', noon: null, afternoon: null, evening: null, night: 'c_abcd12' });
+  assert.deepEqual(st.settings.micProfile, { minFlat: 0.1, riseDb: 8, minDur: 300, maxDur: 4500 });
+  assert.deepEqual(st.settings.sync, { token: 'tok', gistId: 'abc', lastSync: 123 });
+  assert.equal(st.sighs[0].r, 'c_abcd12', '紀錄上的自訂代號保留');
+
+  const bad = normalizeState({ settings: { micProfile: { minFlat: 'x' }, sync: { token: '' } } });
+  assert.equal(bad.settings.micProfile, null);
+  assert.equal(bad.settings.sync, null);
 });
 
 test('儲存失敗（例如空間不足）回傳 false 而不丟錯', () => {
@@ -80,46 +132,56 @@ test('儲存失敗（例如空間不足）回傳 false 而不丟錯', () => {
   assert.equal(store.save(defaultState()), false);
 });
 
-test('mergeSighs 以時間戳去重並排序', () => {
+test('mergeSighs 以時間戳去重並排序，筆記不會被空的蓋掉', () => {
   const merged = mergeSighs(
     [
-      { t: 100, r: null },
+      { t: 100, r: null, n: '第一句' },
       { t: 200, r: 'work' },
     ],
     [
       { t: 200, r: 'money' },
+      { t: 100, r: null },
       { t: 50, r: null },
       { t: 'bad' },
     ],
   );
   assert.deepEqual(merged, [
     { t: 50, r: null },
-    { t: 100, r: null },
+    { t: 100, r: null, n: '第一句' },
     { t: 200, r: 'money' },
   ]);
 });
 
-test('parseImport 接受整份匯出或純陣列，拒絕其他東西', () => {
-  const full = exportJSON({ sighs: [{ t: 5, r: 'work' }] }, 0);
-  assert.deepEqual(parseImport(full), [{ t: 5, r: 'work' }]);
-  assert.deepEqual(parseImport('[{"t":7}]'), [{ t: 7, r: null }]);
+test('parseImport 接受整份匯出或純陣列，會帶回自訂標籤，拒絕其他東西', () => {
+  const state = defaultState();
+  state.sighs = [{ t: 5, r: 'work' }];
+  state.settings.customReasons = [{ id: 'c_abcd12', label: '房東' }];
+  const full = exportJSON(state, 0);
+  assert.deepEqual(parseImport(full), { sighs: [{ t: 5, r: 'work' }], customReasons: [{ id: 'c_abcd12', label: '房東' }] });
+  assert.deepEqual(parseImport('[{"t":7}]'), { sighs: [{ t: 7, r: null }], customReasons: [] });
   assert.throws(() => parseImport('{"foo":1}'));
   assert.throws(() => parseImport('not json'));
 });
 
 test('exportJSON 帶有識別欄位', () => {
-  const obj = JSON.parse(exportJSON({ sighs: [{ t: 1, r: null }] }, 0));
+  const obj = JSON.parse(exportJSON({ sighs: [{ t: 1, r: null }], settings: { customReasons: [] } }, 0));
   assert.equal(obj.app, 'ah-sigh-counter');
-  assert.equal(obj.v, 1);
+  assert.equal(obj.v, 2);
   assert.equal(typeof obj.exportedAt, 'string');
   assert.deepEqual(obj.sighs, [{ t: 1, r: null }]);
 });
 
-test('toCSV 有標題列，會跳脫逗號與引號', () => {
-  const csv = toCSV([{ t: 1000, r: 'work', a: 1 }], (r) => (r === 'work' ? '工作, "加班"' : '沒為什麼'));
+test('toCSV 有標題列（含筆記），會跳脫逗號與引號', () => {
+  const csv = toCSV([{ t: 1000, r: 'work', a: 1, n: '他說"再等等"' }], (r) => (r === 'work' ? '工作, "加班"' : '沒為什麼'));
   const lines = csv.trim().split('\n');
-  assert.equal(lines[0], 'timestamp,datetime,reason,reason_label,auto');
+  assert.equal(lines[0], 'timestamp,datetime,reason,reason_label,auto,note');
   assert.ok(lines[1].startsWith('1000,'));
-  assert.ok(lines[1].endsWith(',work,"工作, ""加班""",1'), lines[1]);
+  assert.ok(lines[1].endsWith(',work,"工作, ""加班""",1,"他說""再等等"""'), lines[1]);
   assert.equal(toCSV([]).trim().split('\n').length, 1);
+});
+
+test('cleanNote 去空白、截長度', () => {
+  assert.equal(cleanNote('  a   b  '), 'a b');
+  assert.equal(cleanNote('x'.repeat(500)).length, 200);
+  assert.equal(cleanNote(null), '');
 });

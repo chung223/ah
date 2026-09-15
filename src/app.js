@@ -1,7 +1,7 @@
-// 主程式：把資料層（storage）、統計（stats）、偵測器（detector）接到畫面上。
+// 主程式：把資料層（storage）、統計（stats）、偵測器（detector）等接到畫面上。
 // 所有 DOM 操作都集中在這裡；其他模組不碰畫面。
 
-import { createStore, mergeSighs, parseImport, toCSV, exportJSON } from './storage.js';
+import { createStore, mergeSighs, parseImport, toCSV, exportJSON, cleanNote } from './storage.js';
 import {
   countToday,
   countsByDay,
@@ -15,42 +15,59 @@ import {
   formatDateLabel,
   hourLabel,
   dayKey,
+  shortDate,
+  periodKey,
+  PERIODS,
   WEEKDAYS,
+  weekdayPeriodGrid,
+  yearGrid,
+  weekSummary,
 } from './stats.js';
 import { pickQuote, pickIdleLine, milestoneMessage } from './quotes.js';
-import { SighListener } from './detector.js';
+import { SighListener, profileFromSamples } from './detector.js';
 import { playExhale } from './sound.js';
 import { parseQuickAction, stripQuickAction, quickUrl } from './quick.js';
-
-/** 原因清單。id 為 null 代表「沒為什麼」，也是預設值。 */
-export const REASONS = [
-  { id: null, label: '沒為什麼' },
-  { id: 'work', label: '工作' },
-  { id: 'study', label: '課業' },
-  { id: 'love', label: '感情' },
-  { id: 'family', label: '家庭' },
-  { id: 'money', label: '金錢' },
-  { id: 'health', label: '身體' },
-  { id: 'weather', label: '天氣' },
-  { id: 'people', label: '人際' },
-  { id: 'other', label: '其他' },
-];
+import {
+  orderedReasons,
+  labelFor,
+  addCustomReason,
+  renameCustomReason,
+  removeCustomReason,
+  moveReason,
+} from './reasons.js';
+import { shouldSuggestBreathing, recentCount, createBreathSession } from './breath.js';
+import { createGistClient, syncOnce } from './sync.js';
+import { drawReport, reportFilename } from './report.js';
 
 const FLOAT_WORDS = ['唉', '唉～', '呼…', '哎', '嗯…', '唉。'];
 const THEME_COLORS = { dark: '#0d1120', light: '#f4eee3' };
+const HOUR = 3_600_000;
 
-const labelOf = (id) => (REASONS.find((r) => r.id === (id ?? null)) || REASONS[0]).label;
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const reduceMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+const esc = (s) =>
+  String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
 const store = createStore(window.localStorage);
 let state = store.load();
 let currentView = 'record';
 let statsRange = 7;
 let listener = null;
+let calibration = null;
 let toastTimer = null;
 let todayStamp = dayKey(Date.now());
+let lastPeriod = null;
+let breathDismissedAt = 0;
+let breathPromptTimer = null;
+let breathSession = null;
+let syncTimer = null;
+let syncing = false;
+let reportCanvas = null;
+let reportBlob = null;
+
+const labelOf = (id) => labelFor(state.settings, id);
+const reasonList = () => orderedReasons(state.settings);
 
 const ui = {
   tabs: $$('.tabs [role="tab"]'),
@@ -66,6 +83,10 @@ const ui = {
   floatLayer: $('#float-layer'),
   undoBtn: $('#undo-btn'),
   reasons: $('#reasons'),
+  breathPrompt: $('#breath-prompt'),
+  breathPromptText: $('#breath-prompt-text'),
+  breathYes: $('#breath-yes'),
+  breathNo: $('#breath-no'),
 
   weekChart: $('#week-chart'),
   weekTotal: $('#week-total'),
@@ -81,6 +102,9 @@ const ui = {
   micStatus: $('#mic-status'),
   micSens: $('#mic-sens'),
   micLast: $('#mic-last'),
+  micCal: $('#mic-cal'),
+  micCalReset: $('#mic-cal-reset'),
+  micCalStatus: $('#mic-cal-status'),
 
   recentList: $('#recent-list'),
   recentEmpty: $('#recent-empty'),
@@ -90,42 +114,95 @@ const ui = {
   daySummary: $('#day-summary'),
   hourChart: $('#hour-chart'),
   hourSummary: $('#hour-summary'),
-  reasonList: $('#reason-list'),
+  reasonListEl: $('#reason-list'),
   records: $('#records'),
   insightList: $('#insight-list'),
+  yearHeat: $('#year-heat'),
+  yearSummary: $('#year-summary'),
+  weekPeriod: $('#week-period'),
+  weekPeriodSummary: $('#week-period-summary'),
+  reportMake: $('#report-make'),
+  reportPreview: $('#report-preview'),
+  reportImg: $('#report-img'),
+  reportShare: $('#report-share'),
+  reportSave: $('#report-save'),
+  reportStatus: $('#report-status'),
+  noteSearch: $('#note-search'),
+  noteList: $('#note-list'),
+  noteEmpty: $('#note-empty'),
 
   themeSeg: $('#theme-seg'),
   soundToggle: $('#sound-toggle'),
+  badgeToggle: $('#badge-toggle'),
+  badgeNote: $('#badge-note'),
   quickUrl: $('#quick-url'),
   copyQuick: $('#copy-quick'),
   exportJson: $('#export-json'),
   exportCsv: $('#export-csv'),
   importFile: $('#import-file'),
   clearAll: $('#clear-all'),
+  reasonManage: $('#reason-manage'),
+  reasonNew: $('#reason-new'),
+  reasonAdd: $('#reason-add'),
+  periodToggle: $('#period-toggle'),
+  periodList: $('#period-list'),
+  syncSetup: $('#sync-setup'),
+  syncConnected: $('#sync-connected'),
+  syncToken: $('#sync-token'),
+  syncConnect: $('#sync-connect'),
+  syncStatus: $('#sync-status'),
+  syncNow: $('#sync-now'),
+  syncDisconnect: $('#sync-disconnect'),
+
+  quickOverlay: $('#quick-overlay'),
+  quickCount: $('#quick-count'),
+  quickUndo: $('#quick-undo'),
+  quickClose: $('#quick-close'),
+  breathOverlay: $('#breath-overlay'),
+  breathCircle: $('#breath-circle'),
+  breathPhase: $('#breath-phase'),
+  breathCycle: $('#breath-cycle'),
+  breathStop: $('#breath-stop'),
 
   toast: $('#toast'),
+  toastText: $('#toast-text'),
+  toastActions: $('#toast-actions'),
 };
 
 /* ---------- 小工具 ---------- */
 
-function toast(text, ms = 2600) {
-  ui.toast.textContent = text;
+function hideToast() {
+  ui.toast.classList.remove('is-on');
+}
+
+/** 顯示提示；actions: [{ label, onClick }] 會變成可以點的按鈕。 */
+function toast(text, opts = {}) {
+  const { ms = 2600, actions = [] } = typeof opts === 'number' ? { ms: opts } : opts;
+  ui.toastText.textContent = text;
+  ui.toastActions.innerHTML = '';
+  for (const a of actions) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'toast-btn';
+    b.textContent = a.label;
+    b.addEventListener('click', () => {
+      hideToast();
+      a.onClick();
+    });
+    ui.toastActions.appendChild(b);
+  }
+  ui.toast.classList.toggle('has-actions', actions.length > 0);
   ui.toast.classList.add('is-on');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => ui.toast.classList.remove('is-on'), ms);
+  toastTimer = setTimeout(hideToast, ms);
 }
 
 function persist() {
   if (!store.save(state)) toast('存不進去，瀏覽器的儲存空間可能滿了');
 }
 
-function shortDate(key) {
-  const [, m, d] = key.split('-').map(Number);
-  return `${m}/${d}`;
-}
-
-function download(name, text, type) {
-  const blob = new Blob([text], { type });
+function download(name, data, type) {
+  const blob = data instanceof Blob ? data : new Blob([data], { type });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
@@ -136,9 +213,15 @@ function download(name, text, type) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+function fullTime(ts) {
+  const d = new Date(ts);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getMonth() + 1}/${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
 /**
- * 產生長條圖 SVG。data: [{ count, ... }]
- * 所有文字都來自程式內部的固定字串或數字，不含使用者輸入。
+ * 產生長條圖 SVG，直接放進 box。data: [{ count, ... }]
+ * 以容器的實際像素寬度當座標系，文字與長條才不會隨卡片寬度放大。
  */
 function barChart(box, data, opts = {}) {
   const {
@@ -150,7 +233,6 @@ function barChart(box, data, opts = {}) {
     aria = '',
     animate = true,
   } = opts;
-  // 以容器的實際像素寬度當座標系，文字與長條才不會隨卡片寬度放大。
   const W = Math.max(120, Math.round(box.clientWidth) || 300);
   box.dataset.w = String(W);
   const n = data.length || 1;
@@ -166,16 +248,16 @@ function barChart(box, data, opts = {}) {
     const y = H - padB - h;
     const cls = !d.count ? 'bar is-zero' : highlight(d, i) ? 'bar is-hi' : 'bar';
     parts.push(
-      `<rect class="${cls}" x="${x.toFixed(2)}" y="${y.toFixed(2)}" width="${bw.toFixed(2)}" height="${h.toFixed(2)}" rx="${Math.min(3, bw / 2)}" style="--i:${i}"><title>${d.title || ''}</title></rect>`,
+      `<rect class="${cls}" x="${x.toFixed(2)}" y="${y.toFixed(2)}" width="${bw.toFixed(2)}" height="${h.toFixed(2)}" rx="${Math.min(3, bw / 2)}" style="--i:${i}"><title>${esc(d.title || '')}</title></rect>`,
     );
     if (valueLabels && d.count) {
       parts.push(`<text class="val" x="${(x + bw / 2).toFixed(2)}" y="${(y - 5).toFixed(2)}" text-anchor="middle">${d.count}</text>`);
     }
     if (labelAt(i, n)) {
-      parts.push(`<text class="lbl" x="${(x + bw / 2).toFixed(2)}" y="${H - 4}" text-anchor="middle">${label(d, i)}</text>`);
+      parts.push(`<text class="lbl" x="${(x + bw / 2).toFixed(2)}" y="${H - 4}" text-anchor="middle">${esc(label(d, i))}</text>`);
     }
   });
-  box.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" class="chart${animate ? '' : ' no-anim'}" role="img" aria-label="${aria}">${parts.join('')}</svg>`;
+  box.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" class="chart${animate ? '' : ' no-anim'}" role="img" aria-label="${esc(aria)}">${parts.join('')}</svg>`;
 }
 
 /* ---------- 主題 ---------- */
@@ -200,7 +282,7 @@ function applyTheme() {
   });
 }
 
-/* ---------- 畫面 ---------- */
+/* ---------- 記錄頁 ---------- */
 
 function renderCount() {
   const today = countToday(state.sighs);
@@ -217,11 +299,22 @@ function bumpCount() {
   ui.todayCount.classList.add('bump');
 }
 
+function reasonOptions(selected) {
+  return reasonList()
+    .map(
+      (r) =>
+        `<option value="${r.id ?? ''}"${(r.id ?? null) === (selected ?? null) ? ' selected' : ''}>${esc(r.label)}</option>`,
+    )
+    .join('');
+}
+
 function renderReasons() {
-  ui.reasons.innerHTML = REASONS.map(
-    (r) =>
-      `<button type="button" class="chip" data-reason="${r.id ?? ''}" aria-pressed="${(r.id ?? null) === state.settings.reason}">${r.label}</button>`,
-  ).join('');
+  ui.reasons.innerHTML = reasonList()
+    .map(
+      (r) =>
+        `<button type="button" class="chip" data-reason="${r.id ?? ''}" aria-pressed="${(r.id ?? null) === (state.settings.reason ?? null)}">${esc(r.label)}</button>`,
+    )
+    .join('');
   ui.sighBtnReason.textContent = state.settings.reason ? `因為${labelOf(state.settings.reason)}` : '沒為什麼';
 }
 
@@ -251,14 +344,107 @@ function renderRecent() {
       (s) => `
       <li class="recent-item" data-t="${s.t}">
         <span class="recent-time">${formatTime(s.t)}</span>
-        <select class="recent-reason" aria-label="這次嘆氣的原因">
-          ${REASONS.map(
-            (r) => `<option value="${r.id ?? ''}"${(r.id ?? null) === (s.r ?? null) ? ' selected' : ''}>${r.label}</option>`,
-          ).join('')}
-        </select>
+        <select class="select recent-reason" aria-label="這次嘆氣的原因">${reasonOptions(s.r)}</select>
         ${s.a ? '<span class="recent-auto" title="麥克風自動偵測">自動</span>' : ''}
         <button class="recent-del" type="button" aria-label="刪除這筆紀錄">×</button>
+        <div class="recent-note">
+          <button type="button" class="note-edit${s.n ? ' has-note' : ''}">${s.n ? `「${esc(s.n)}」` : '加一句'}</button>
+        </div>
       </li>`,
+    )
+    .join('');
+}
+
+/** 把某一筆的筆記欄變成輸入框。 */
+function openNoteEditor(t) {
+  const item = ui.recentList.querySelector(`.recent-item[data-t="${t}"]`);
+  if (!item) return;
+  const holder = item.querySelector('.recent-note');
+  const sigh = state.sighs.find((x) => x.t === t);
+  holder.innerHTML = `<input type="text" class="note-input" maxlength="200" placeholder="一句話就好" value="${esc(sigh?.n || '')}" aria-label="這次嘆氣的筆記">`;
+  const input = holder.querySelector('input');
+  let done = false;
+  const finish = (save) => {
+    if (done) return;
+    done = true;
+    if (save) setNoteOf(t, input.value);
+    else renderRecent();
+  };
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') finish(true);
+    if (e.key === 'Escape') finish(false);
+  });
+  input.addEventListener('blur', () => finish(true));
+  item.scrollIntoView({ block: 'nearest', behavior: reduceMotion() ? 'auto' : 'smooth' });
+  input.focus();
+}
+
+/* ---------- 統計頁 ---------- */
+
+function renderYearHeat() {
+  const g = yearGrid(state.sighs, Date.now(), 53);
+  const cell = 12;
+  const gap = 3;
+  const left = 26;
+  const top = 18;
+  const step = cell + gap;
+  const W = left + g.columns.length * step;
+  const H = top + 7 * step;
+  const level = (c) => (c === 0 ? 0 : Math.max(1, Math.ceil((c / g.max) * 4)));
+  const parts = [];
+  for (const m of g.months) {
+    parts.push(`<text class="mo" x="${left + m.col * step}" y="11">${m.label}</text>`);
+  }
+  [1, 3, 5].forEach((d) => {
+    parts.push(`<text class="wd" x="0" y="${top + d * step + cell - 2}">${WEEKDAYS[d]}</text>`);
+  });
+  g.columns.forEach((col, w) => {
+    col.forEach((c, d) => {
+      const cls = c.future ? 'cell future' : `cell l${level(c.count)}${c.today ? ' today' : ''}`;
+      parts.push(
+        `<rect class="${cls}" x="${left + w * step}" y="${top + d * step}" width="${cell}" height="${cell}" rx="3"><title>${formatDateLabel(c.key)}：${c.count} 次</title></rect>`,
+      );
+    });
+  });
+  ui.yearHeat.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" class="heat" role="img" aria-label="最近一年每天的嘆氣次數">${parts.join('')}</svg>`;
+  ui.yearHeat.scrollLeft = ui.yearHeat.scrollWidth;
+  ui.yearSummary.textContent = g.total
+    ? `這 ${g.columns.length} 週共 ${g.total} 次，最多的一天 ${g.max} 次`
+    : '這一年還沒有紀錄';
+}
+
+function renderWeekPeriod() {
+  const g = weekdayPeriodGrid(state.sighs);
+  const head = `<div class="wp-head"></div>${PERIODS.map((p) => `<div class="wp-head">${p.label}</div>`).join('')}`;
+  const rows = g.grid
+    .map(
+      (row, r) =>
+        `<div class="wp-row-label">${WEEKDAYS[r]}</div>${row
+          .map((v) => {
+            const a = g.max ? (0.12 + (v / g.max) * 0.88).toFixed(2) : 0;
+            return v
+              ? `<div class="wp-cell" style="--a:${a}" title="星期${WEEKDAYS[r]} ${v} 次">${v}</div>`
+              : '<div class="wp-cell is-zero"></div>';
+          })
+          .join('')}`,
+    )
+    .join('');
+  ui.weekPeriod.innerHTML = head + rows;
+  ui.weekPeriodSummary.textContent = g.busiest
+    ? `星期${WEEKDAYS[g.busiest.weekday]}的${PERIODS.find((p) => p.key === g.busiest.period).label}最常嘆氣`
+    : '還沒有資料';
+}
+
+function renderNotes() {
+  if (!ui.noteList) return;
+  const q = ui.noteSearch.value.trim().toLowerCase();
+  const items = state.sighs.filter((s) => s.n && (!q || s.n.toLowerCase().includes(q))).slice(-60).reverse();
+  ui.noteEmpty.hidden = items.length > 0;
+  ui.noteEmpty.textContent = q ? '沒有符合的筆記。' : '還沒有筆記。在「最近」清單裡點「加一句」就可以寫。';
+  ui.noteList.innerHTML = items
+    .map(
+      (s) =>
+        `<li><span class="note-when">${fullTime(s.t)}</span><span class="note-reason">${esc(labelOf(s.r))}</span><span class="note-text">${esc(s.n)}</span></li>`,
     )
     .join('');
 }
@@ -302,11 +488,11 @@ function renderStats({ animate = true } = {}) {
   ui.hourSummary.textContent = s.total ? `最常在${hourLabel(s.busiestHour)}左右` : '還沒有資料';
 
   const reasons = countsByReason(state.sighs);
-  ui.reasonList.innerHTML = reasons.length
+  ui.reasonListEl.innerHTML = reasons.length
     ? reasons
         .map(
           (r, i) =>
-            `<li style="--i:${i}"><span class="reason-name">${labelOf(r.reason)}</span><span class="reason-bar"><i style="width:${(r.ratio * 100).toFixed(1)}%"></i></span><span class="reason-n">${r.count}</span></li>`,
+            `<li style="--i:${i}"><span class="reason-name">${esc(labelOf(r.reason))}</span><span class="reason-bar"><i style="width:${(r.ratio * 100).toFixed(1)}%"></i></span><span class="reason-n">${r.count}</span></li>`,
         )
         .join('')
     : '<li class="muted">還沒有資料</li>';
@@ -323,14 +509,77 @@ function renderStats({ animate = true } = {}) {
   ].join('');
 
   ui.insightList.innerHTML = insights(state.sighs, Date.now(), labelOf)
-    .map((t, i) => `<li style="--i:${i}">${t}</li>`)
+    .map((t, i) => `<li style="--i:${i}">${esc(t)}</li>`)
     .join('');
+
+  renderYearHeat();
+  renderWeekPeriod();
+  renderNotes();
+}
+
+/* ---------- 設定頁 ---------- */
+
+function renderReasonManage() {
+  const list = reasonList().filter((r) => r.id);
+  ui.reasonManage.innerHTML = list
+    .map(
+      (r, i) => `
+      <li class="rm-item" data-id="${r.id}">
+        <span class="rm-label">${esc(r.label)}${r.custom ? '' : '<small>內建</small>'}</span>
+        <span class="rm-actions">
+          <button type="button" class="icon-mini" data-act="up" aria-label="上移"${i === 0 ? ' disabled' : ''}>↑</button>
+          <button type="button" class="icon-mini" data-act="down" aria-label="下移"${i === list.length - 1 ? ' disabled' : ''}>↓</button>
+          ${r.custom ? '<button type="button" class="icon-mini" data-act="rename">改名</button><button type="button" class="icon-mini danger" data-act="remove">刪除</button>' : ''}
+        </span>
+      </li>`,
+    )
+    .join('');
+}
+
+function renderPeriodList() {
+  ui.periodToggle.checked = state.settings.reasonMode === 'period';
+  ui.periodList.hidden = state.settings.reasonMode !== 'period';
+  ui.periodList.innerHTML = PERIODS.map(
+    (p) => `
+    <label class="period-row">
+      <span>${p.label}<small>${p.hours}</small></span>
+      <select class="select" data-period="${p.key}">${reasonOptions(state.settings.periodReasons[p.key])}</select>
+    </label>`,
+  ).join('');
+}
+
+function setSyncStatus(text) {
+  if (text != null) {
+    ui.syncStatus.textContent = text;
+    return;
+  }
+  const cfg = state.settings.sync;
+  if (!cfg) {
+    ui.syncStatus.textContent = '';
+    return;
+  }
+  ui.syncStatus.textContent = cfg.lastSync
+    ? `上次同步：${fullTime(cfg.lastSync)}${cfg.gistId ? ` · Gist ${cfg.gistId.slice(0, 8)}…` : ''}`
+    : '尚未同步';
+}
+
+function renderSyncCard() {
+  const cfg = state.settings.sync;
+  ui.syncSetup.hidden = !!cfg;
+  ui.syncConnected.hidden = !cfg;
+  setSyncStatus();
 }
 
 function renderSettings() {
   ui.soundToggle.checked = state.settings.sound;
+  ui.badgeToggle.checked = state.settings.badge;
+  ui.badgeNote.hidden = 'setAppBadge' in navigator;
   ui.micSens.value = String(state.settings.sensitivity);
+  ui.micCalReset.hidden = !state.settings.micProfile;
   ui.quickUrl.textContent = quickUrl(location.href);
+  renderReasonManage();
+  renderPeriodList();
+  renderSyncCard();
 }
 
 function renderAll() {
@@ -373,35 +622,73 @@ function pressVisual() {
   setTimeout(() => ui.sighBtn.classList.remove('is-pressed'), 160);
 }
 
+/* ---------- App 圖示徽章 ---------- */
+
+function updateBadge() {
+  if (!('setAppBadge' in navigator)) return;
+  const n = state.settings.badge ? countToday(state.sighs) : 0;
+  try {
+    const p = n ? navigator.setAppBadge(n) : navigator.clearAppBadge();
+    if (p && p.catch) p.catch(() => {});
+  } catch {
+    /* 不支援就算了 */
+  }
+}
+
 /* ---------- 資料操作 ---------- */
 
-function addSigh({ auto = false, reason } = {}) {
+function tombstone(t) {
+  if (state.deleted.includes(t)) return;
+  state.deleted.push(t);
+  state.deleted.sort((a, b) => a - b);
+  if (state.deleted.length > 5000) state.deleted.splice(0, state.deleted.length - 5000);
+}
+
+/** 資料變動後的固定流程：存檔、重畫、徽章、排程同步。 */
+function afterChange() {
+  persist();
+  renderAll();
+  updateBadge();
+  scheduleSync();
+}
+
+function addSigh({ auto = false, reason, quiet = false } = {}) {
   const t = Date.now();
   const sigh = { t, r: reason === undefined ? state.settings.reason : reason };
   if (auto) sigh.a = 1;
   state.sighs.push(sigh);
   const prev = state.sighs[state.sighs.length - 2];
   if (prev && prev.t > t) state.sighs.sort((a, b) => a.t - b.t);
-  persist();
-  renderAll();
+  afterChange();
 
   bumpCount();
   spawnRing();
   spawnFloat();
   ui.quote.textContent = pickQuote();
   const milestone = milestoneMessage(state.sighs.length);
-  if (milestone) toast(milestone, 4200);
+  if (milestone) toast(milestone, { ms: 4200 });
+  else if (!quiet) {
+    toast(`今天第 ${countToday(state.sighs)} 次`, {
+      ms: 3200,
+      actions: [
+        { label: '撤銷', onClick: undoLast },
+        { label: '加一句', onClick: () => openNoteEditor(t) },
+      ],
+    });
+  }
   // 音效與震動只在使用者碰過頁面之後才做；用快速網址開頁時瀏覽器會擋。
   const interacted = !navigator.userActivation || navigator.userActivation.hasBeenActive;
   if (state.settings.sound && interacted) playExhale();
   if (!auto && interacted && navigator.vibrate) navigator.vibrate(12);
+  maybeSuggestBreathing();
+  return sigh;
 }
 
 function undoLast() {
   if (!state.sighs.length) return;
-  state.sighs.pop();
-  persist();
-  renderAll();
+  const removed = state.sighs.pop();
+  tombstone(removed.t);
+  afterChange();
   if (!countToday(state.sighs)) ui.quote.textContent = pickIdleLine();
   toast('已撤銷上一次');
 }
@@ -410,8 +697,8 @@ function deleteSigh(t) {
   const i = state.sighs.findIndex((s) => s.t === t);
   if (i < 0) return;
   state.sighs.splice(i, 1);
-  persist();
-  renderAll();
+  tombstone(t);
+  afterChange();
 }
 
 function setReasonOf(t, reason) {
@@ -419,7 +706,20 @@ function setReasonOf(t, reason) {
   if (!s) return;
   s.r = reason;
   persist();
+  scheduleSync();
   if (currentView === 'stats') renderStats();
+}
+
+function setNoteOf(t, note) {
+  const s = state.sighs.find((x) => x.t === t);
+  if (!s) return;
+  const n = cleanNote(note);
+  if (n) s.n = n;
+  else delete s.n;
+  persist();
+  scheduleSync();
+  renderRecent();
+  if (currentView === 'stats') renderNotes();
 }
 
 function setCurrentReason(reason) {
@@ -433,11 +733,12 @@ function clearAll() {
     toast('本來就沒有紀錄');
     return;
   }
-  const ok = window.confirm(`確定要清除全部 ${state.sighs.length} 筆紀錄嗎？這無法復原。`);
+  const extra = state.settings.sync ? '雲端備份也會跟著清空。' : '';
+  const ok = window.confirm(`確定要清除全部 ${state.sighs.length} 筆紀錄嗎？這無法復原。${extra}`);
   if (!ok) return;
+  for (const s of state.sighs) tombstone(s.t);
   state.sighs = [];
-  persist();
-  renderAll();
+  afterChange();
   ui.quote.textContent = pickIdleLine();
   toast('已清除所有紀錄');
 }
@@ -448,10 +749,13 @@ async function importFromFile(file) {
     const text = await file.text();
     const incoming = parseImport(text);
     const before = state.sighs.length;
-    state.sighs = mergeSighs(state.sighs, incoming);
-    persist();
-    renderAll();
-    toast(`匯入 ${incoming.length} 筆，新增了 ${state.sighs.length - before} 筆`);
+    state.sighs = mergeSighs(state.sighs, incoming.sighs);
+    const known = new Set((state.settings.customReasons || []).map((c) => c.id));
+    for (const c of incoming.customReasons) {
+      if (!known.has(c.id)) state.settings.customReasons.push(c);
+    }
+    afterChange();
+    toast(`匯入 ${incoming.sighs.length} 筆，新增了 ${state.sighs.length - before} 筆`);
   } catch (err) {
     toast(`匯入失敗：${err && err.message ? err.message : '檔案格式不對'}`);
   }
@@ -477,6 +781,69 @@ async function share() {
   }
 }
 
+/* ---------- 時段預設原因 ---------- */
+
+function applyPeriodReason(force = false) {
+  if (state.settings.reasonMode !== 'period') return;
+  const key = periodKey(new Date().getHours());
+  if (!force && key === lastPeriod) return;
+  lastPeriod = key;
+  const r = state.settings.periodReasons[key] ?? null;
+  if ((state.settings.reason ?? null) !== r) {
+    state.settings.reason = r;
+    persist();
+    renderReasons();
+  }
+}
+
+/* ---------- 深呼吸 ---------- */
+
+function maybeSuggestBreathing() {
+  const now = Date.now();
+  if (!shouldSuggestBreathing(state.sighs, now)) return;
+  if (now - breathDismissedAt < HOUR) return;
+  if (!ui.breathOverlay.hidden) return;
+  ui.breathPromptText.textContent = `這一小時已經 ${recentCount(state.sighs, now)} 次了。要不要跟著呼吸一分鐘？`;
+  ui.breathPrompt.hidden = false;
+  // 沒理會的話 45 秒後自己收起來，一小時內不再問。
+  clearTimeout(breathPromptTimer);
+  breathPromptTimer = setTimeout(dismissBreathing, 45_000);
+}
+
+function dismissBreathing() {
+  clearTimeout(breathPromptTimer);
+  breathDismissedAt = Date.now();
+  ui.breathPrompt.hidden = true;
+}
+
+function startBreathing() {
+  dismissBreathing();
+  ui.breathOverlay.hidden = false;
+  ui.breathCircle.style.transitionDuration = '0ms';
+  ui.breathCircle.style.transform = 'scale(0.55)';
+  ui.breathPhase.textContent = '準備';
+  ui.breathCycle.textContent = '';
+  breathSession = createBreathSession({
+    onPhase: ({ phase, ms, scale, cycle, cycles }) => {
+      ui.breathPhase.textContent = phase;
+      ui.breathCycle.textContent = `第 ${cycle} / ${cycles} 輪`;
+      ui.breathCircle.style.transitionDuration = reduceMotion() ? '0ms' : `${ms}ms`;
+      ui.breathCircle.style.transform = `scale(${scale})`;
+    },
+    onDone: ({ completed }) => {
+      ui.breathOverlay.hidden = true;
+      breathSession = null;
+      if (completed) toast('做完了。肩膀放下來，慢慢來。', { ms: 3600 });
+    },
+  });
+  requestAnimationFrame(() => requestAnimationFrame(() => breathSession && breathSession.start()));
+}
+
+function stopBreathing() {
+  if (breathSession) breathSession.stop();
+  else ui.breathOverlay.hidden = true;
+}
+
 /* ---------- 麥克風 ---------- */
 
 const WHY_TEXT = {
@@ -493,6 +860,55 @@ function setMicStatus(text) {
   ui.micStatus.textContent = text;
 }
 
+function setCalStatus(text) {
+  ui.micCalStatus.textContent = text;
+}
+
+function handleSample(e) {
+  if (!calibration) return;
+  const n = calibration.samples.length;
+  if (e.dur < 250 || e.why === 'too-long') {
+    setCalStatus(`${e.dur < 250 ? '太短了' : '太長了'}，再嘆一次（第 ${n + 1} / 3 次）`);
+    return;
+  }
+  calibration.samples.push({ meanFlat: e.meanFlat, dur: e.dur, rise: e.rise });
+  if (calibration.samples.length < 3) {
+    setCalStatus(`收到了，再一次（第 ${calibration.samples.length + 1} / 3 次）`);
+    return;
+  }
+  const profile = profileFromSamples(calibration.samples);
+  calibration = null;
+  listener.setCalibrating(false);
+  ui.micCal.disabled = false;
+  if (profile) {
+    state.settings.micProfile = profile;
+    listener.setProfile(profile);
+    persist();
+    ui.micCalReset.hidden = false;
+    setCalStatus('校正完成，已依你的聲音調整門檻。');
+    setMicStatus('聆聽中');
+  } else {
+    setCalStatus('樣本不太像嘆氣，再試一次。');
+  }
+}
+
+function startCalibration() {
+  if (!listener) return;
+  calibration = { samples: [] };
+  listener.setCalibrating(true);
+  ui.micCal.disabled = true;
+  setCalStatus('請自然地嘆一口氣（第 1 / 3 次）');
+  setMicStatus('校正中');
+}
+
+function resetCalibration() {
+  state.settings.micProfile = null;
+  if (listener) listener.setProfile(null);
+  persist();
+  ui.micCalReset.hidden = true;
+  setCalStatus('已回到預設門檻。');
+}
+
 async function startMic() {
   if (!SighListener.supported) {
     ui.micToggle.checked = false;
@@ -501,19 +917,24 @@ async function startMic() {
   }
   listener = new SighListener({
     sensitivity: state.settings.sensitivity,
+    profile: state.settings.micProfile,
     onSigh: () => {
-      addSigh({ auto: true });
+      addSigh({ auto: true, quiet: true });
       setMicStatus('聽到了，記錄一次');
     },
     onLevel: ({ level, active }) => {
       ui.micMeterFill.style.transform = `scaleX(${level.toFixed(3)})`;
       ui.micMeterFill.classList.toggle('is-active', active);
-      if (active) setMicStatus('有聲音…');
+      if (active && !calibration) setMicStatus('有聲音…');
     },
     onEvent: (e) => {
       if (e.type === 'ended') {
         stopMic();
         toast('麥克風被中斷了');
+        return;
+      }
+      if (e.type === 'sample') {
+        handleSample(e);
         return;
       }
       const sec = (e.dur / 1000).toFixed(1);
@@ -527,6 +948,7 @@ async function startMic() {
     ui.micBody.hidden = false;
     ui.micCard.classList.add('is-on');
     ui.micLast.textContent = '';
+    setCalStatus(state.settings.micProfile ? '已用你的聲音校正過。' : '');
     setMicStatus('聆聽中');
   } catch (err) {
     listener = null;
@@ -538,9 +960,127 @@ async function startMic() {
 function stopMic() {
   if (listener) listener.stop();
   listener = null;
+  calibration = null;
+  ui.micCal.disabled = false;
   ui.micToggle.checked = false;
   ui.micBody.hidden = true;
   ui.micCard.classList.remove('is-on');
+}
+
+/* ---------- 同步 ---------- */
+
+function scheduleSync() {
+  if (!state.settings.sync) return;
+  clearTimeout(syncTimer);
+  syncTimer = setTimeout(() => runSync({ silent: true }), 4000);
+}
+
+async function runSync({ silent = false } = {}) {
+  const cfg = state.settings.sync;
+  if (!cfg || syncing) return;
+  if (!navigator.onLine) {
+    if (!silent) toast('目前離線，連上網之後會再試');
+    return;
+  }
+  syncing = true;
+  setSyncStatus('同步中…');
+  try {
+    const res = await syncOnce(state, createGistClient(cfg.token));
+    persist();
+    renderAll();
+    updateBadge();
+    if (!silent) {
+      toast(
+        {
+          created: '已建立雲端備份',
+          pushed: '已上傳到雲端',
+          pulled: '已從雲端更新',
+          both: '已和雲端合併',
+          unchanged: '已是最新',
+        }[res.status] || '同步完成',
+      );
+    }
+  } catch (err) {
+    if (err && err.code === 'auth') {
+      state.settings.sync = null;
+      persist();
+      renderSyncCard();
+      toast('token 無效或沒有 Gist 權限，請重新設定', { ms: 4000 });
+    } else {
+      setSyncStatus(`上次同步失敗：${err && err.message ? err.message : '未知錯誤'}`);
+      if (!silent) toast(`同步失敗：${err && err.message ? err.message : '未知錯誤'}`);
+    }
+  } finally {
+    syncing = false;
+  }
+}
+
+async function connectSync() {
+  const token = ui.syncToken.value.trim();
+  if (!token) {
+    toast('請先貼上 token');
+    return;
+  }
+  state.settings.sync = { token, gistId: '', lastSync: 0 };
+  persist();
+  renderSyncCard();
+  await runSync();
+  if (state.settings.sync) ui.syncToken.value = '';
+}
+
+function disconnectSync() {
+  state.settings.sync = null;
+  persist();
+  renderSyncCard();
+  toast('已移除 token，紀錄仍留在這台裝置上');
+}
+
+/* ---------- 週報 ---------- */
+
+async function makeReport() {
+  ui.reportStatus.textContent = '產生中…';
+  ui.reportMake.disabled = true;
+  try {
+    const data = weekSummary(state.sighs, Date.now(), labelOf);
+    reportCanvas = reportCanvas || document.createElement('canvas');
+    await drawReport(reportCanvas, data, {
+      theme: effectiveTheme(),
+      url: `${location.origin}${location.pathname}`,
+      quote: pickQuote(),
+    });
+    reportBlob = await new Promise((resolve) => reportCanvas.toBlob(resolve, 'image/png'));
+    ui.reportImg.src = reportCanvas.toDataURL('image/png');
+    ui.reportPreview.hidden = false;
+    let canShareFile = false;
+    try {
+      canShareFile =
+        !!navigator.canShare &&
+        navigator.canShare({ files: [new File([reportBlob], 'report.png', { type: 'image/png' })] });
+    } catch {
+      canShareFile = false;
+    }
+    ui.reportShare.hidden = !canShareFile;
+    ui.reportStatus.textContent = '';
+  } catch (err) {
+    ui.reportStatus.textContent = `產生失敗：${err && err.message ? err.message : '未知錯誤'}`;
+  } finally {
+    ui.reportMake.disabled = false;
+  }
+}
+
+async function shareReport() {
+  if (!reportBlob) return;
+  const file = new File([reportBlob], reportFilename(), { type: 'image/png' });
+  try {
+    await navigator.share({ files: [file], title: '嘆氣週報' });
+  } catch (err) {
+    if (!err || err.name !== 'AbortError') toast('分享失敗，改用「儲存圖片」吧');
+  }
+}
+
+function saveReport() {
+  if (!reportBlob) return;
+  download(reportFilename(), reportBlob, 'image/png');
 }
 
 /* ---------- 分頁 ---------- */
@@ -579,15 +1119,21 @@ function bindEvents() {
   });
 
   ui.recentList.addEventListener('click', (e) => {
-    const del = e.target.closest('.recent-del');
-    if (!del) return;
-    deleteSigh(Number(del.closest('.recent-item').dataset.t));
+    const item = e.target.closest('.recent-item');
+    if (!item) return;
+    const t = Number(item.dataset.t);
+    if (e.target.closest('.recent-del')) deleteSigh(t);
+    else if (e.target.closest('.note-edit')) openNoteEditor(t);
   });
   ui.recentList.addEventListener('change', (e) => {
     const sel = e.target.closest('.recent-reason');
     if (!sel) return;
     setReasonOf(Number(sel.closest('.recent-item').dataset.t), sel.value || null);
   });
+
+  ui.breathYes.addEventListener('click', startBreathing);
+  ui.breathNo.addEventListener('click', dismissBreathing);
+  ui.breathStop.addEventListener('click', stopBreathing);
 
   ui.tabs.forEach((tab) => tab.addEventListener('click', () => showView(tab.dataset.view)));
   $('.tabs').addEventListener('keydown', (e) => {
@@ -618,6 +1164,11 @@ function bindEvents() {
     persist();
     if (state.settings.sound) playExhale();
   });
+  ui.badgeToggle.addEventListener('change', () => {
+    state.settings.badge = ui.badgeToggle.checked;
+    persist();
+    updateBadge();
+  });
 
   ui.rangeSeg.addEventListener('click', (e) => {
     const b = e.target.closest('button[data-range]');
@@ -626,6 +1177,10 @@ function bindEvents() {
     $$('button', ui.rangeSeg).forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
     renderStats();
   });
+  ui.noteSearch.addEventListener('input', renderNotes);
+  ui.reportMake.addEventListener('click', makeReport);
+  ui.reportShare.addEventListener('click', shareReport);
+  ui.reportSave.addEventListener('click', saveReport);
 
   ui.micToggle.addEventListener('change', () => {
     if (ui.micToggle.checked) startMic();
@@ -636,6 +1191,8 @@ function bindEvents() {
     if (listener) listener.setSensitivity(state.settings.sensitivity);
   });
   ui.micSens.addEventListener('change', persist);
+  ui.micCal.addEventListener('click', startCalibration);
+  ui.micCalReset.addEventListener('click', resetCalibration);
 
   ui.exportJson.addEventListener('click', () => {
     download(`sighs-${dayKey(Date.now())}.json`, exportJSON(state), 'application/json');
@@ -663,12 +1220,111 @@ function bindEvents() {
     }
   });
 
+  // 原因標籤管理
+  const addReason = () => {
+    const res = addCustomReason(state.settings, ui.reasonNew.value);
+    if (res.error) {
+      toast(res.error);
+      return;
+    }
+    ui.reasonNew.value = '';
+    persist();
+    renderAll();
+    scheduleSync();
+    toast('已新增標籤');
+  };
+  ui.reasonAdd.addEventListener('click', addReason);
+  ui.reasonNew.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      addReason();
+    }
+  });
+  ui.reasonManage.addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-act]');
+    if (!btn) return;
+    const id = btn.closest('.rm-item').dataset.id;
+    const act = btn.dataset.act;
+    if (act === 'up' || act === 'down') {
+      if (moveReason(state.settings, id, act === 'up' ? -1 : 1)) {
+        persist();
+        renderAll();
+        scheduleSync();
+      }
+      return;
+    }
+    if (act === 'rename') {
+      const name = window.prompt('新的名稱', labelOf(id));
+      if (name == null) return;
+      const res = renameCustomReason(state.settings, id, name);
+      if (res.error) toast(res.error);
+      else {
+        persist();
+        renderAll();
+        scheduleSync();
+      }
+      return;
+    }
+    if (act === 'remove') {
+      const used = state.sighs.filter((s) => s.r === id).length;
+      const msg = used
+        ? `確定刪除「${labelOf(id)}」？有 ${used} 筆紀錄用這個標籤，會改成「沒為什麼」。`
+        : `確定刪除「${labelOf(id)}」？`;
+      if (!window.confirm(msg)) return;
+      for (const s of state.sighs) if (s.r === id) s.r = null;
+      removeCustomReason(state.settings, id);
+      afterChange();
+      toast('已刪除標籤');
+    }
+  });
+
+  // 時段預設原因
+  ui.periodToggle.addEventListener('change', () => {
+    state.settings.reasonMode = ui.periodToggle.checked ? 'period' : 'manual';
+    persist();
+    renderPeriodList();
+    lastPeriod = null;
+    applyPeriodReason(true);
+  });
+  ui.periodList.addEventListener('change', (e) => {
+    const sel = e.target.closest('select[data-period]');
+    if (!sel) return;
+    state.settings.periodReasons[sel.dataset.period] = sel.value || null;
+    persist();
+    lastPeriod = null;
+    applyPeriodReason(true);
+  });
+
+  // 同步
+  ui.syncConnect.addEventListener('click', connectSync);
+  ui.syncToken.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') connectSync();
+  });
+  ui.syncNow.addEventListener('click', () => runSync());
+  ui.syncDisconnect.addEventListener('click', disconnectSync);
+  window.addEventListener('online', () => scheduleSync());
+
+  // 快速記錄的確認畫面
+  ui.quickUndo.addEventListener('click', () => {
+    undoLast();
+    ui.quickOverlay.hidden = true;
+  });
+  ui.quickClose.addEventListener('click', () => {
+    ui.quickOverlay.hidden = true;
+  });
+
   // 空白鍵：焦點不在任何控制項上時，等同按下大按鈕。
   document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      if (!ui.breathOverlay.hidden) stopBreathing();
+      if (!ui.quickOverlay.hidden) ui.quickOverlay.hidden = true;
+      hideToast();
+      return;
+    }
     if (e.key !== ' ' || e.repeat) return;
     const active = document.activeElement;
     const onBody = !active || active === document.body || active === document.documentElement;
-    if (!onBody || currentView !== 'record') return;
+    if (!onBody || currentView !== 'record' || !ui.quickOverlay.hidden || !ui.breathOverlay.hidden) return;
     e.preventDefault();
     pressVisual();
     addSigh();
@@ -676,9 +1332,15 @@ function bindEvents() {
 
   // 回到前景或跨過午夜時，把「今天」相關的畫面重畫。
   document.addEventListener('visibilitychange', () => {
-    if (!document.hidden) checkDayChange(true);
+    if (document.hidden) return;
+    checkDayChange(true);
+    applyPeriodReason();
+    scheduleSync();
   });
-  setInterval(() => checkDayChange(false), 30_000);
+  setInterval(() => {
+    checkDayChange(false);
+    applyPeriodReason();
+  }, 30_000);
   setInterval(renderCalm, 1000);
 
   // 卡片寬度改變（轉向、調整視窗）時，用新的寬度重畫圖表；這種重畫不播動畫。
@@ -703,7 +1365,19 @@ function checkDayChange(force) {
   const changed = key !== todayStamp;
   todayStamp = key;
   renderAll();
+  updateBadge();
   if (changed && !countToday(state.sighs)) ui.quote.textContent = pickIdleLine();
+}
+
+function handleQuickAction() {
+  const quick = parseQuickAction(location.search);
+  if (!quick) return;
+  // 先把參數拿掉，重新整理或返回時才不會再記一次。
+  history.replaceState(null, '', stripQuickAction(location.href));
+  showView('record');
+  addSigh({ reason: quick.reason, quiet: true });
+  ui.quickCount.textContent = String(countToday(state.sighs));
+  ui.quickOverlay.hidden = false;
 }
 
 function registerServiceWorker() {
@@ -717,26 +1391,17 @@ function registerServiceWorker() {
 
 /* ---------- 啟動 ---------- */
 
-function handleQuickAction() {
-  const quick = parseQuickAction(location.search);
-  if (!quick) return;
-  // 先把參數拿掉，重新整理或返回時才不會再記一次。
-  history.replaceState(null, '', stripQuickAction(location.href));
-  showView('record');
-  addSigh({ reason: quick.reason });
-  if (!milestoneMessage(state.sighs.length)) {
-    toast(`記錄了，今天第 ${countToday(state.sighs)} 次`, 3200);
-  }
-}
-
 function init() {
   applyTheme();
+  applyPeriodReason(true);
   renderAll();
   ui.quote.textContent = countToday(state.sighs) ? pickQuote() : pickIdleLine();
   bindEvents();
   showView(location.hash.slice(1) || 'record');
   handleQuickAction();
+  updateBadge();
   registerServiceWorker();
+  if (state.settings.sync) setTimeout(() => runSync({ silent: true }), 1500);
   document.body.classList.add('is-ready');
 }
 
