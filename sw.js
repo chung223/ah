@@ -2,7 +2,9 @@
 // 策略：安裝時預先快取所有靜態檔案；之後同源請求採「先用快取、背景更新」，
 // 頁面導覽採「先試網路、失敗才用快取」，這樣新版本會在下次開啟時生效。
 
-const VERSION = '2026-09-15.2';
+// 版本號：部署時（.github/workflows/deploy.yml）會自動換成該次 commit 的編號，
+// 所以每次發布都會建立新的快取、丟掉舊的。本機開發時維持 'dev'。
+const VERSION = 'dev';
 const CACHE = `ah-sigh-${VERSION}`;
 const ASSETS = [
   './',

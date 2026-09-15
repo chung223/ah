@@ -108,6 +108,8 @@ npm test         # 執行 test/ 裡的單元測試
 
 每次 push 到 `main`，`.github/workflows/deploy.yml` 會先跑測試，通過後把網站檔案（`index.html`、`styles.css`、`sw.js`、`manifest.webmanifest`、`icons/`、`src/`）推到 `gh-pages` 分支，GitHub Pages 幾十秒內就會更新。也可以在 Actions 頁面手動觸發。
 
+發布時會把 `sw.js` 裡的 `VERSION` 換成該次 commit 的編號，所以每次更新都會建立新的離線快取、清掉舊的；使用者下次打開就是新版。
+
 如果哪天 Pages 被關掉了，到 **Settings → Pages → Build and deployment → Source** 選 **Deploy from a branch → gh-pages / (root)** 即可。
 
 ## 隱私

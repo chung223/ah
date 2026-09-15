@@ -34,6 +34,12 @@ jobs:
         run: |
           rm -rf _site && mkdir _site
           cp -r index.html styles.css sw.js manifest.webmanifest .nojekyll icons src _site/
+      - name: 把 Service Worker 版本號換成 commit 編號
+        run: |
+          short="${GITHUB_SHA::7}"
+          sed -i "s/^const VERSION = '[^']*';/const VERSION = '${short}';/" _site/sw.js
+          grep -q "^const VERSION = '${short}';" _site/sw.js
+          echo "sw.js VERSION = ${short}"
       - name: 推到 gh-pages 分支
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
