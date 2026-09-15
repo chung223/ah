@@ -148,12 +148,116 @@ export function summary(sighs, now = Date.now()) {
   };
 }
 
+export const PERIODS = [
+  { key: 'morning', label: '早上', hours: '5–10 點' },
+  { key: 'noon', label: '中午', hours: '11–12 點' },
+  { key: 'afternoon', label: '下午', hours: '13–17 點' },
+  { key: 'evening', label: '晚上', hours: '18–21 點' },
+  { key: 'night', label: '深夜', hours: '22–4 點' },
+];
+
+export function periodKey(h) {
+  if (h >= 5 && h <= 10) return 'morning';
+  if (h >= 11 && h <= 12) return 'noon';
+  if (h >= 13 && h <= 17) return 'afternoon';
+  if (h >= 18 && h <= 21) return 'evening';
+  return 'night';
+}
+
 export function periodLabel(h) {
-  if (h >= 5 && h <= 10) return '早上';
-  if (h >= 11 && h <= 12) return '中午';
-  if (h >= 13 && h <= 17) return '下午';
-  if (h >= 18 && h <= 21) return '晚上';
-  return '深夜';
+  return PERIODS.find((p) => p.key === periodKey(h)).label;
+}
+
+/** 'YYYY-MM-DD' → '9/14' */
+export function shortDate(key) {
+  const [, m, d] = key.split('-').map(Number);
+  return `${m}/${d}`;
+}
+
+/** 星期 × 時段 的次數表：grid[星期 0–6][時段索引]。 */
+export function weekdayPeriodGrid(sighs) {
+  const grid = Array.from({ length: 7 }, () => new Array(PERIODS.length).fill(0));
+  let max = 0;
+  for (const s of sighs) {
+    const d = new Date(s.t);
+    const r = d.getDay();
+    const c = PERIODS.findIndex((p) => p.key === periodKey(d.getHours()));
+    grid[r][c]++;
+    if (grid[r][c] > max) max = grid[r][c];
+  }
+  const weekdayTotals = grid.map((row) => row.reduce((a, b) => a + b, 0));
+  const busiestWeekday = sighs.length ? weekdayTotals.indexOf(Math.max(...weekdayTotals)) : null;
+  let busiest = null;
+  grid.forEach((row, r) =>
+    row.forEach((v, c) => {
+      if (v > 0 && (!busiest || v > busiest.count)) busiest = { weekday: r, period: PERIODS[c].key, count: v };
+    }),
+  );
+  return { grid, max, weekdayTotals, busiestWeekday, busiest };
+}
+
+/**
+ * 熱力圖資料：最近 weeks 週，每欄一週（週日開始），最後一欄包含今天。
+ * columns[w][d] = { key, start, count, future, today }
+ */
+export function yearGrid(sighs, now = Date.now(), weeks = 53) {
+  const map = countsByDayMap(sighs);
+  const today = startOfDay(now);
+  const lastSunday = addDays(today, -new Date(today).getDay());
+  const firstSunday = addDays(lastSunday, -(weeks - 1) * 7);
+  const columns = [];
+  const months = [];
+  let max = 0;
+  let total = 0;
+  let lastMonth = -1;
+  for (let w = 0; w < weeks; w++) {
+    const col = [];
+    for (let d = 0; d < 7; d++) {
+      const start = addDays(firstSunday, w * 7 + d);
+      const future = start > today;
+      const key = dayKey(start);
+      const count = future ? 0 : map.get(key) || 0;
+      if (count > max) max = count;
+      total += count;
+      col.push({ key, start, count, future, today: start === today });
+    }
+    const m = new Date(col[0].start).getMonth();
+    if (m !== lastMonth) {
+      months.push({ col: w, label: `${m + 1}月` });
+      lastMonth = m;
+    }
+    columns.push(col);
+  }
+  return { columns, max, months, total, firstSunday, lastSunday };
+}
+
+/** 週報用的摘要：最近 7 天（含今天）對比前 7 天。 */
+export function weekSummary(sighs, now = Date.now(), labelOf = (r) => String(r)) {
+  const fortnight = countsByDay(sighs, 14, now);
+  const days = fortnight.slice(7);
+  const prev = fortnight.slice(0, 7);
+  const sum = (arr) => arr.reduce((a, d) => a + d.count, 0);
+  const total = sum(days);
+  const prevTotal = sum(prev);
+  const start = days[0].start;
+  const endExclusive = addDays(days[6].start, 1);
+  const inWeek = sighs.filter((s) => s.t >= start && s.t < endExclusive);
+  const top = countsByReason(inWeek).find((r) => r.reason != null) || null;
+  const maxDay = days.reduce((m, d) => (!m || d.count > m.count ? d : m), null);
+  const hours = countsByHour(inWeek);
+  return {
+    rangeLabel: `${shortDate(days[0].key)} – ${shortDate(days[6].key)}`,
+    days,
+    total,
+    prevTotal,
+    diff: total - prevTotal,
+    maxDay: maxDay && maxDay.count ? maxDay : null,
+    topReason: top ? { reason: top.reason, label: labelOf(top.reason), count: top.count, ratio: top.ratio } : null,
+    longestCalm: inWeek.length ? calmGaps(inWeek, now).longest : null,
+    busiestHour: inWeek.length ? hours.indexOf(Math.max(...hours)) : null,
+    activeDays: days.filter((d) => d.count).length,
+    noteCount: inWeek.filter((s) => s.n).length,
+  };
 }
 
 /** 例：14 → 「下午 2 點」 */
@@ -218,6 +322,12 @@ export function insights(sighs, now = Date.now(), labelOf = (r) => String(r)) {
     if (diff < 0) out.push(`這 7 天比前 7 天少嘆了 ${-diff} 次。`);
     else if (diff > 0) out.push(`這 7 天比前 7 天多嘆了 ${diff} 次。`);
     else out.push('這 7 天和前 7 天一樣多。');
+  }
+  if (s.total >= 14) {
+    const g = weekdayPeriodGrid(sighs);
+    if (g.busiestWeekday != null && g.weekdayTotals[g.busiestWeekday] >= (s.total / 7) * 1.4) {
+      out.push(`星期${WEEKDAYS[g.busiestWeekday]}是你最常嘆氣的日子。`);
+    }
   }
   if (s.longestCalm >= 6 * 3_600_000) {
     out.push(`最長曾有 ${formatDuration(s.longestCalm)} 沒有嘆氣。`);

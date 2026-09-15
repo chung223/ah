@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { classifyEvent, spectralFlatness, movingAverage, paramsFor } from '../src/detector.js';
+import { classifyEvent, spectralFlatness, movingAverage, paramsFor, profileFromSamples } from '../src/detector.js';
 
 const frames = (dbs, flat, step = 40) => dbs.map((db, i) => ({ t: i * step, db, flat }));
 
@@ -54,4 +54,26 @@ test('靈敏度愈高，門檻愈低', () => {
   assert.ok(low.minFlat > high.minFlat);
   assert.deepEqual(paramsFor('garbage'), paramsFor(0));
   assert.deepEqual(paramsFor(5), paramsFor(1));
+});
+
+test('校正：從樣本算出個人門檻，靈敏度只做微調', () => {
+  assert.equal(profileFromSamples([]), null);
+  assert.equal(profileFromSamples([{ meanFlat: 0.3, dur: 900, rise: 20 }]), null, '一個樣本不夠');
+  const p = profileFromSamples([
+    { meanFlat: 0.3, dur: 900, rise: 20 },
+    { meanFlat: 0.2, dur: 1300, rise: 14 },
+    { meanFlat: 0.25, dur: 100, rise: 9 }, // 太短的樣本被忽略
+  ]);
+  assert.ok(Math.abs(p.minFlat - 0.14) < 1e-9);
+  assert.equal(p.riseDb, 7);
+  assert.equal(p.minDur, 540);
+  assert.equal(p.maxDur, 2600);
+
+  const mid = paramsFor(0.5, p);
+  assert.ok(Math.abs(mid.minFlat - p.minFlat) < 1e-9);
+  assert.equal(mid.riseDb, p.riseDb);
+  assert.equal(mid.minDur, 540);
+  const high = paramsFor(1, p);
+  assert.ok(high.riseDb < mid.riseDb && high.minFlat < mid.minFlat);
+  assert.equal(paramsFor(0.5, { minFlat: 'x' }).minDur, 450, '壞掉的校正就用預設');
 });
