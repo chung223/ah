@@ -104,12 +104,11 @@ npm test         # 執行 test/ 裡的單元測試
 
 ## 部署到 GitHub Pages
 
-1. 把程式碼合併到 `main`。
-2. 第一次部署前，到 **Settings → Pages → Build and deployment → Source** 選 **GitHub Actions**。
-   （工作流程裡的 `actions/configure-pages` 帶有 `enablement: true`，通常會自動啟用；如果第一次執行失敗，手動選一次再重跑即可。）
-3. 之後每次 push 到 `main`，`.github/workflows/deploy.yml` 會先跑測試，通過後部署到 `https://chung223.github.io/ah/`。也可以在 Actions 頁面手動觸發。
+網站在 https://chung223.github.io/ah/ ，從 `gh-pages` 分支發布。
 
-另一個不用 Actions 的做法：因為網站就在 repo 根目錄（已放 `.nojekyll`），也可以選 **Deploy from a branch → main / (root)**。
+每次 push 到 `main`，`.github/workflows/deploy.yml` 會先跑測試，通過後把網站檔案（`index.html`、`styles.css`、`sw.js`、`manifest.webmanifest`、`icons/`、`src/`）推到 `gh-pages` 分支，GitHub Pages 幾十秒內就會更新。也可以在 Actions 頁面手動觸發。
+
+如果哪天 Pages 被關掉了，到 **Settings → Pages → Build and deployment → Source** 選 **Deploy from a branch → gh-pages / (root)** 即可。
 
 ## 隱私
 
