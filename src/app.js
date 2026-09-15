@@ -20,6 +20,7 @@ import {
 import { pickQuote, pickIdleLine, milestoneMessage } from './quotes.js';
 import { SighListener } from './detector.js';
 import { playExhale } from './sound.js';
+import { parseQuickAction, stripQuickAction, quickUrl } from './quick.js';
 
 /** 原因清單。id 為 null 代表「沒為什麼」，也是預設值。 */
 export const REASONS = [
@@ -95,6 +96,8 @@ const ui = {
 
   themeSeg: $('#theme-seg'),
   soundToggle: $('#sound-toggle'),
+  quickUrl: $('#quick-url'),
+  copyQuick: $('#copy-quick'),
   exportJson: $('#export-json'),
   exportCsv: $('#export-csv'),
   importFile: $('#import-file'),
@@ -327,6 +330,7 @@ function renderStats({ animate = true } = {}) {
 function renderSettings() {
   ui.soundToggle.checked = state.settings.sound;
   ui.micSens.value = String(state.settings.sensitivity);
+  ui.quickUrl.textContent = quickUrl(location.href);
 }
 
 function renderAll() {
@@ -371,9 +375,9 @@ function pressVisual() {
 
 /* ---------- 資料操作 ---------- */
 
-function addSigh({ auto = false } = {}) {
+function addSigh({ auto = false, reason } = {}) {
   const t = Date.now();
-  const sigh = { t, r: state.settings.reason };
+  const sigh = { t, r: reason === undefined ? state.settings.reason : reason };
   if (auto) sigh.a = 1;
   state.sighs.push(sigh);
   const prev = state.sighs[state.sighs.length - 2];
@@ -387,8 +391,10 @@ function addSigh({ auto = false } = {}) {
   ui.quote.textContent = pickQuote();
   const milestone = milestoneMessage(state.sighs.length);
   if (milestone) toast(milestone, 4200);
-  if (state.settings.sound) playExhale();
-  if (!auto && navigator.vibrate) navigator.vibrate(12);
+  // 音效與震動只在使用者碰過頁面之後才做；用快速網址開頁時瀏覽器會擋。
+  const interacted = !navigator.userActivation || navigator.userActivation.hasBeenActive;
+  if (state.settings.sound && interacted) playExhale();
+  if (!auto && interacted && navigator.vibrate) navigator.vibrate(12);
 }
 
 function undoLast() {
@@ -642,6 +648,20 @@ function bindEvents() {
     ui.importFile.value = '';
   });
   ui.clearAll.addEventListener('click', clearAll);
+  ui.copyQuick.addEventListener('click', async () => {
+    const url = quickUrl(location.href);
+    try {
+      await navigator.clipboard.writeText(url);
+      toast('已複製快速記錄網址');
+    } catch {
+      const range = document.createRange();
+      range.selectNodeContents(ui.quickUrl);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+      toast('已選取網址，長按可以複製');
+    }
+  });
 
   // 空白鍵：焦點不在任何控制項上時，等同按下大按鈕。
   document.addEventListener('keydown', (e) => {
@@ -697,12 +717,25 @@ function registerServiceWorker() {
 
 /* ---------- 啟動 ---------- */
 
+function handleQuickAction() {
+  const quick = parseQuickAction(location.search);
+  if (!quick) return;
+  // 先把參數拿掉，重新整理或返回時才不會再記一次。
+  history.replaceState(null, '', stripQuickAction(location.href));
+  showView('record');
+  addSigh({ reason: quick.reason });
+  if (!milestoneMessage(state.sighs.length)) {
+    toast(`記錄了，今天第 ${countToday(state.sighs)} 次`, 3200);
+  }
+}
+
 function init() {
   applyTheme();
   renderAll();
   ui.quote.textContent = countToday(state.sighs) ? pickQuote() : pickIdleLine();
   bindEvents();
   showView(location.hash.slice(1) || 'record');
+  handleQuickAction();
   registerServiceWorker();
   document.body.classList.add('is-ready');
 }

@@ -1132,6 +1132,33 @@ input[type="range"] {
   padding-bottom: 6px;
 }
 
+.settings-card + .settings-card {
+  margin-top: 16px;
+}
+
+.settings-card h3 {
+  margin: 16px 0 0;
+}
+
+.settings-card h3 + .setting {
+  border-top: 0;
+}
+
+.quick-url {
+  display: block;
+  margin-top: 10px;
+  padding: 7px 11px;
+  border-radius: 9px;
+  background: var(--bg-3);
+  color: var(--ink);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12.5px;
+  line-height: 1.5;
+  word-break: break-all;
+  user-select: all;
+  -webkit-user-select: all;
+}
+
 .setting {
   display: flex;
   align-items: center;

@@ -2,7 +2,7 @@
 // 策略：安裝時預先快取所有靜態檔案；之後同源請求採「先用快取、背景更新」，
 // 頁面導覽採「先試網路、失敗才用快取」，這樣新版本會在下次開啟時生效。
 
-const VERSION = '2026-09-15.1';
+const VERSION = '2026-09-15.2';
 const CACHE = `ah-sigh-${VERSION}`;
 const ASSETS = [
   './',
@@ -15,6 +15,7 @@ const ASSETS = [
   './src/quotes.js',
   './src/detector.js',
   './src/sound.js',
+  './src/quick.js',
   './icons/icon.svg',
   './icons/icon-192.png',
   './icons/icon-512.png',
