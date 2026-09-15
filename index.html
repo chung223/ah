@@ -56,6 +56,12 @@
   <main class="page">
     <!-- 記錄 -->
     <section id="view-record" class="view" role="tabpanel" aria-labelledby="tab-record">
+      <article class="card review-card" id="review-card" hidden>
+        <h3>昨天的你</h3>
+        <p class="review-main" id="review-main"></p>
+        <ul class="review-notes" id="review-notes"></ul>
+        <button type="button" class="btn btn-sm" id="review-ok">知道了</button>
+      </article>
       <div class="hero">
         <div class="hero-count reveal" style="--i:0">
           <span class="vertical-label" aria-hidden="true">今日嘆氣</span>
@@ -79,7 +85,7 @@
           </div>
           <div class="under-btn">
             <button type="button" class="link-btn" id="undo-btn" disabled>撤銷上一次</button>
-            <span class="hint">或按 <kbd>空白鍵</kbd></span>
+            <span class="hint">長按＝長嘆 · 或按 <kbd>空白鍵</kbd></span>
           </div>
           <div class="breath-prompt" id="breath-prompt" hidden>
             <p id="breath-prompt-text"></p>
@@ -113,6 +119,7 @@
           </div>
           <dl class="mini-stats">
             <div><dt>最長平靜</dt><dd id="calm-longest">—</dd></div>
+            <div><dt>連續沒嘆氣</dt><dd id="calm-streak">—</dd></div>
             <div><dt>累計</dt><dd><span id="total-count">0</span> 次</dd></div>
           </dl>
           <button type="button" class="btn btn-sm" id="share-btn">分享今天</button>
@@ -284,9 +291,13 @@
         <div class="setting">
           <div class="setting-text">
             <strong>清除</strong>
-            <span>刪掉這台裝置上的所有紀錄。無法復原。</span>
+            <span>刪掉這台裝置上的所有紀錄。24 小時內可以復原，之後就真的沒了。</span>
+            <span id="restore-hint" hidden></span>
           </div>
-          <button type="button" class="btn danger" id="clear-all">清除全部</button>
+          <div class="btn-row">
+            <button type="button" class="btn" id="restore-trash" hidden>復原上次清除</button>
+            <button type="button" class="btn danger" id="clear-all">清除全部</button>
+          </div>
         </div>
       </div>
 
@@ -373,6 +384,28 @@
               <button type="button" class="btn btn-sm danger" id="sync-disconnect">移除 token</button>
             </div>
           </div>
+          <details class="sc-help" id="shortcut-help">
+            <summary>iPhone 捷徑：不開瀏覽器就記錄</summary>
+            <p class="sub">捷徑會在你的 Gist 留一則留言，App 下次打開（或同步）時把留言變成一筆紀錄。做一次就好，之後綁到「輕點背面」或 Siri。</p>
+            <ol class="sc-steps">
+              <li>捷徑 App → 新增捷徑 → 加入「取得 URL 內容」。</li>
+              <li>
+                URL 貼上：
+                <code class="quick-url" id="sc-url"></code>
+                <button type="button" class="btn btn-sm" id="copy-sc-url">複製網址</button>
+              </li>
+              <li>
+                方法選 <strong>POST</strong>。標頭加兩個：<code>Authorization</code> 的值是 <code>Bearer 你的token</code>（中間一個空格）、<code>Accept</code> 的值是 <code>application/vnd.github+json</code>。
+                <button type="button" class="btn btn-sm" id="copy-sc-token">複製 token</button>
+              </li>
+              <li>要求本文選 <strong>JSON</strong>，加一個欄位 <code>body</code>，值填 <code>唉</code>。想帶原因就寫「唉 工作」，後面再接一句話會變成筆記。</li>
+              <li>設定 → 輔助使用 → 觸控 → 輕點背面，選這個捷徑。或直接對 Siri 說捷徑的名字。</li>
+            </ol>
+            <div class="btn-row report-actions">
+              <button type="button" class="btn btn-sm" id="sc-test" disabled>送一筆測試</button>
+              <span class="sub" id="sc-status"></span>
+            </div>
+          </details>
         </div>
       </div>
 

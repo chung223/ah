@@ -126,6 +126,7 @@ export function summary(sighs, now = Date.now()) {
   const topReason = reasons.find((r) => r.reason != null) || null;
 
   const { longest, current } = calmGaps(sighs, now);
+  const longCount = sighs.filter((s) => s.i === 2).length;
 
   const fortnight = countsByDay(sighs, 14, now);
   const prevWeek = fortnight.slice(0, 7).reduce((a, d) => a + d.count, 0);
@@ -143,6 +144,7 @@ export function summary(sighs, now = Date.now()) {
     topReason,
     longestCalm: longest,
     currentCalm: current,
+    longCount,
     thisWeek,
     prevWeek,
   };
@@ -229,6 +231,59 @@ export function yearGrid(sighs, now = Date.now(), weeks = 53) {
     columns.push(col);
   }
   return { columns, max, months, total, firstSunday, lastSunday };
+}
+
+/**
+ * 連續天數：
+ * - calmDays：從今天往回數、連續沒嘆氣的天數（今天有嘆就是 0）
+ * - recordDays：連續有紀錄的天數（今天還沒有的話，從昨天起算）
+ */
+export function streaks(sighs, now = Date.now()) {
+  if (!sighs.length) return { calmDays: 0, recordDays: 0 };
+  const map = countsByDayMap(sighs);
+  const today = startOfDay(now);
+  const firstDay = startOfDay(sighs[0].t);
+  let calmDays = 0;
+  for (let i = 0; i < 3650; i++) {
+    const d = addDays(today, -i);
+    if (d < firstDay || map.get(dayKey(d))) break;
+    calmDays++;
+  }
+  let recordDays = 0;
+  const startOffset = map.get(dayKey(today)) ? 0 : 1;
+  for (let i = startOffset; i < 3650 + startOffset; i++) {
+    if (!map.get(dayKey(addDays(today, -i)))) break;
+    recordDays++;
+  }
+  return { calmDays, recordDays };
+}
+
+/** 昨天回顧：幾次、最常的原因、最常的時段、幾則筆記。 */
+export function yesterdayReview(sighs, now = Date.now(), labelOf = (r) => String(r)) {
+  const y1 = startOfDay(now);
+  const y0 = addDays(y1, -1);
+  const list = sighs.filter((s) => s.t >= y0 && s.t < y1);
+  const top = countsByReason(list).find((r) => r.reason != null) || null;
+  const periodCounts = new Map();
+  for (const s of list) {
+    const k = periodKey(new Date(s.t).getHours());
+    periodCounts.set(k, (periodCounts.get(k) || 0) + 1);
+  }
+  let busiest = null;
+  for (const p of PERIODS) {
+    const c = periodCounts.get(p.key) || 0;
+    if (c && (!busiest || c > busiest.count)) busiest = { label: p.label, count: c };
+  }
+  const weekCount = sighs.filter((s) => s.t >= addDays(y1, -7) && s.t < y1).length;
+  return {
+    key: dayKey(y0),
+    count: list.length,
+    longCount: list.filter((s) => s.i === 2).length,
+    topReason: top ? labelOf(top.reason) : null,
+    busiestPeriod: busiest ? busiest.label : null,
+    notes: list.filter((s) => s.n).map((s) => s.n).slice(0, 3),
+    weekCount,
+  };
 }
 
 /** 週報用的摘要：最近 7 天（含今天）對比前 7 天。 */

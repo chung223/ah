@@ -19,6 +19,8 @@ import {
   weekSummary,
   shortDate,
   PERIODS,
+  streaks,
+  yesterdayReview,
 } from '../src/stats.js';
 
 // 全部用本機時間建構，測試不依賴時區。
@@ -221,4 +223,43 @@ test('insights：星期幾最常嘆氣', () => {
   }
   const lines = insights(many, now, label);
   assert.ok(lines.some((l) => l.includes('星期一')), lines.join('\n'));
+});
+
+test('streaks：連續沒嘆氣、連續有紀錄', () => {
+  assert.deepEqual(streaks([], now), { calmDays: 0, recordDays: 0 });
+  // 今天有嘆 → calm 0；9/14、9/15 連續有紀錄 → 2
+  assert.deepEqual(streaks(sighs, now), { calmDays: 0, recordDays: 2 });
+  // 只有 9/10 一筆：今天往回 9/15..9/11 共 5 天沒嘆；有紀錄的連續天數從昨天起算，昨天沒有 → 0
+  assert.deepEqual(streaks([{ t: at(2026, 9, 10, 9) }], now), { calmDays: 5, recordDays: 0 });
+  // 昨天有、今天還沒 → recordDays 從昨天算
+  const four = [11, 12, 13, 14].map((d) => ({ t: at(2026, 9, d, 9) }));
+  assert.deepEqual(streaks(four, now), { calmDays: 1, recordDays: 4 });
+});
+
+test('yesterdayReview', () => {
+  const r = yesterdayReview(sighs, now, label);
+  assert.equal(r.key, '2026-09-14');
+  assert.equal(r.count, 1);
+  assert.equal(r.topReason, null, '昨天那筆沒有原因');
+  assert.equal(r.busiestPeriod, '深夜');
+  assert.deepEqual(r.notes, []);
+  assert.equal(r.weekCount, 3);
+
+  const rich = [
+    { t: at(2026, 9, 14, 9), r: 'work', n: '早上開會' },
+    { t: at(2026, 9, 14, 10), r: 'work', i: 2 },
+    { t: at(2026, 9, 14, 15), r: 'money', n: '帳單' },
+  ];
+  const r2 = yesterdayReview(rich, now, label);
+  assert.equal(r2.count, 3);
+  assert.equal(r2.longCount, 1);
+  assert.equal(r2.topReason, '工作');
+  assert.equal(r2.busiestPeriod, '早上');
+  assert.deepEqual(r2.notes, ['早上開會', '帳單']);
+  assert.equal(yesterdayReview([], now, label).count, 0);
+});
+
+test('summary 會數長嘆', () => {
+  const s = summary([{ t: at(2026, 9, 15, 9), i: 2 }, { t: at(2026, 9, 15, 10) }], now);
+  assert.equal(s.longCount, 1);
 });

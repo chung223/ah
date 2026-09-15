@@ -8,13 +8,18 @@ export const SCHEMA_VERSION = 2;
 export const MAX_NOTE = 200;
 export const PERIOD_KEYS = ['morning', 'noon', 'afternoon', 'evening', 'night'];
 
+export const TRASH_TTL = 86_400_000; // 清除後 24 小時內可以復原
+
 export function defaultState() {
   return {
     v: SCHEMA_VERSION,
-    // 每一筆嘆氣：{ t: 毫秒時間戳, r: 原因代號或 null, a?: 1 表示麥克風自動偵測, n?: 一句話筆記 }
+    // 每一筆嘆氣：{ t: 毫秒時間戳, r: 原因代號或 null, a?: 1 麥克風自動偵測, n?: 一句話筆記,
+    //             i?: 2 長嘆, s?: 1 由捷徑（Gist 留言）寫入 }
     sighs: [],
     // 被刪掉的紀錄的時間戳（同步用的墓碑，避免刪掉的又從雲端回來）
     deleted: [],
+    // 「清除全部」後暫存的紀錄：{ at, sighs }，24 小時內可以復原
+    trash: null,
     settings: {
       theme: 'auto', // 'auto' | 'dark' | 'light'
       sound: false,
@@ -26,7 +31,8 @@ export function defaultState() {
       customReasons: [], // [{ id: 'c_xxxxxx', label }]
       reasonOrder: null, // 原因顯示順序（不含 null）；null 表示預設順序
       micProfile: null, // 麥克風校正結果 { minFlat, riseDb, minDur, maxDur }
-      sync: null, // { token, gistId, lastSync }
+      sync: null, // { token, gistId, lastSync, force }
+      lastReviewDay: null, // 最後一次看過「昨天回顧」的日期鍵
     },
   };
 }
@@ -50,6 +56,8 @@ export function normalizeSigh(x) {
   if (!Number.isFinite(t) || t <= 0) return null;
   const out = { t: Math.round(t), r: isReasonId(x.r) ? x.r : null };
   if (x.a) out.a = 1;
+  if (Number(x.i) >= 2) out.i = 2;
+  if (x.s) out.s = 1;
   const n = cleanNote(x.n);
   if (n) out.n = n;
   return out;
@@ -85,11 +93,21 @@ function normalizeSync(s) {
     token,
     gistId: typeof s.gistId === 'string' ? s.gistId.trim() : '',
     lastSync: clamp(s.lastSync, 0, Number.MAX_SAFE_INTEGER, 0),
+    force: s.force === true,
   };
 }
 
+function normalizeTrash(tr, now) {
+  if (!tr || typeof tr !== 'object') return null;
+  const at = Number(tr.at);
+  if (!Number.isFinite(at) || now - at > TRASH_TTL || at > now + 60_000) return null;
+  const sighs = Array.isArray(tr.sighs) ? tr.sighs.map(normalizeSigh).filter(Boolean) : [];
+  if (!sighs.length) return null;
+  return { at: Math.round(at), sighs: sighs.sort((a, b) => a.t - b.t) };
+}
+
 /** 把任何來路不明的物件整理成合法狀態；壞掉的欄位回到預設值。 */
-export function normalizeState(raw) {
+export function normalizeState(raw, now = Date.now()) {
   const base = defaultState();
   if (!raw || typeof raw !== 'object') return base;
 
@@ -111,6 +129,7 @@ export function normalizeState(raw) {
     v: SCHEMA_VERSION,
     sighs,
     deleted: normalizeDeleted(raw.deleted),
+    trash: normalizeTrash(raw.trash, now),
     settings: {
       theme: ['auto', 'dark', 'light'].includes(s.theme) ? s.theme : base.settings.theme,
       sound: s.sound === true,
@@ -123,6 +142,7 @@ export function normalizeState(raw) {
       reasonOrder: order && order.length ? order : null,
       micProfile: normalizeMicProfile(s.micProfile),
       sync: normalizeSync(s.sync),
+      lastReviewDay: /^\d{4}-\d{2}-\d{2}$/.test(s.lastReviewDay) ? s.lastReviewDay : null,
     },
   };
 }
@@ -170,6 +190,8 @@ export function mergeSighs(a, b) {
     const prev = map.get(n.t);
     if (prev && prev.n && !n.n) n.n = prev.n;
     if (prev && prev.a && !n.a) n.a = 1;
+    if (prev && prev.i && !n.i) n.i = prev.i;
+    if (prev && prev.s && !n.s) n.s = 1;
     map.set(n.t, n);
   }
   return [...map.values()].sort((x, y) => x.t - y.t);
@@ -216,9 +238,9 @@ export function toCSV(sighs, labelOf = (r) => (r == null ? '' : String(r))) {
     const s = String(v ?? '');
     return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
-  const rows = [['timestamp', 'datetime', 'reason', 'reason_label', 'auto', 'note']];
+  const rows = [['timestamp', 'datetime', 'reason', 'reason_label', 'auto', 'note', 'long', 'shortcut']];
   for (const s of sighs) {
-    rows.push([s.t, localISO(s.t), s.r ?? '', labelOf(s.r ?? null), s.a ? 1 : 0, s.n ?? '']);
+    rows.push([s.t, localISO(s.t), s.r ?? '', labelOf(s.r ?? null), s.a ? 1 : 0, s.n ?? '', s.i === 2 ? 1 : 0, s.s ? 1 : 0]);
   }
   return rows.map((r) => r.map(esc).join(',')).join('\n') + '\n';
 }

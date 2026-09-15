@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mergeData, parseRemote, syncOnce, createGistClient, GIST_FILE, SyncError } from '../src/sync.js';
+import { mergeData, parseRemote, syncOnce, createGistClient, GIST_FILE, SyncError, parseInboxComment, inboxToSighs } from '../src/sync.js';
 
 test('mergeData：聯集、墓碑、筆記保留、標籤合併', () => {
   const local = {
@@ -46,10 +46,18 @@ test('parseRemote 容錯', () => {
   assert.deepEqual(parseRemote('{"sighs":[{"t":1}]}'), { sighs: [{ t: 1 }], deleted: [], customReasons: [], reasonOrder: null });
 });
 
-function fakeClient(initial = null) {
-  const store = { gist: initial, calls: [] };
+function fakeClient(initial = null, comments = []) {
+  const store = { gist: initial, calls: [], comments: [...comments] };
   return {
     store,
+    async listComments(id) {
+      store.calls.push(`comments:${id}`);
+      return store.comments;
+    },
+    async deleteComment(id, commentId) {
+      store.calls.push(`delc:${commentId}`);
+      store.comments = store.comments.filter((c) => c.id !== commentId);
+    },
     async findGist() {
       store.calls.push('find');
       return store.gist ? store.gist.id : null;
@@ -113,7 +121,8 @@ test('syncOnce：沒有變化時不上傳', async () => {
   const state = stateWith([{ t: 1, r: null }], { sync: { token: 't', gistId: 'gist123', lastSync: 0 } });
   const res = await syncOnce(state, client, 7);
   assert.equal(res.status, 'unchanged');
-  assert.deepEqual(client.store.calls, ['read:gist123']);
+  assert.ok(client.store.calls.includes('read:gist123'));
+  assert.ok(!client.store.calls.some((c) => c.startsWith('update')), '沒有上傳');
 });
 
 test('syncOnce：記著的 Gist 被刪掉時重建', async () => {
@@ -151,4 +160,69 @@ test('createGistClient：帶 token、處理 401 與截斷', async () => {
   assert.equal(await client.readGist('g1'), '{"sighs":[]}');
   await assert.rejects(() => client.readGist('bad'), (e) => e.code === 'auth');
   await assert.rejects(() => client.updateGist('zzz', '{}'), (e) => e.code === 'http');
+});
+
+const REASONS = [
+  { id: null, label: '沒為什麼' },
+  { id: 'work', label: '工作' },
+  { id: 'c_abc123', label: '房東' },
+];
+
+test('parseInboxComment：觸發詞、原因（代號或名稱）、筆記', () => {
+  assert.deepEqual(parseInboxComment('唉', REASONS), { r: null, n: '' });
+  assert.deepEqual(parseInboxComment('sigh work', REASONS), { r: 'work', n: '' });
+  assert.deepEqual(parseInboxComment('唉 工作 客戶又改需求', REASONS), { r: 'work', n: '客戶又改需求' });
+  assert.deepEqual(parseInboxComment('唉 房東 又漲租', REASONS), { r: 'c_abc123', n: '又漲租' });
+  assert.deepEqual(parseInboxComment('唉 沒為什麼 就是想嘆', REASONS), { r: null, n: '就是想嘆' });
+  assert.deepEqual(parseInboxComment('今天好累', REASONS), { r: null, n: '今天好累' });
+  assert.deepEqual(parseInboxComment('', REASONS), { r: null, n: '' });
+});
+
+test('inboxToSighs：時間來自留言、id 錯開毫秒、墓碑跳過', () => {
+  const comments = [
+    { id: 10, body: '唉 work', created_at: '2026-09-15T01:02:03Z' },
+    { id: 11, body: '唉', created_at: '2026-09-15T01:02:03Z' },
+    { id: 12, body: 'x', created_at: 'garbage' },
+  ];
+  const out = inboxToSighs(comments, REASONS, []);
+  assert.equal(out.length, 2);
+  assert.notEqual(out[0].sigh.t, out[1].sigh.t, '同一秒的兩則留言時間不同');
+  assert.equal(out[0].sigh.r, 'work');
+  assert.equal(out[0].sigh.s, 1);
+  assert.equal(inboxToSighs(comments, REASONS, [out[0].sigh.t]).length, 1);
+});
+
+test('syncOnce：捷徑留言會變成紀錄、上傳、然後刪掉留言', async () => {
+  const content = JSON.stringify({ sighs: [{ t: 1, r: null }], deleted: [], customReasons: [], reasonOrder: null });
+  const client = fakeClient({ id: 'gist123', content }, [{ id: 7, body: '唉 工作 捷徑來的', created_at: '2026-09-15T01:02:03Z' }]);
+  const state = stateWith([{ t: 1, r: null }], { sync: { token: 't', gistId: 'gist123', lastSync: 0 } });
+  const res = await syncOnce(state, client, 9, { reasons: REASONS });
+  assert.equal(res.inbox, 1);
+  assert.equal(res.status, 'both');
+  assert.equal(state.sighs.length, 2);
+  const added = state.sighs.find((s) => s.s === 1);
+  assert.equal(added.r, 'work');
+  assert.equal(added.n, '捷徑來的');
+  assert.equal(JSON.parse(client.store.gist.content).sighs.length, 2, '雲端也有了');
+  assert.deepEqual(client.store.comments, [], '留言刪掉了');
+  assert.ok(client.store.calls.includes('delc:7'));
+});
+
+test('syncOnce：force 會整份覆蓋雲端（復原清除用）', async () => {
+  const content = JSON.stringify({ sighs: [], deleted: [1, 2], customReasons: [], reasonOrder: null });
+  const client = fakeClient({ id: 'gist123', content });
+  const state = stateWith(
+    [
+      { t: 1, r: null },
+      { t: 2, r: null },
+    ],
+    { sync: { token: 't', gistId: 'gist123', lastSync: 0, force: true } },
+  );
+  const res = await syncOnce(state, client, 9);
+  assert.equal(res.status, 'pushed');
+  assert.equal(state.sighs.length, 2, '本機的沒被雲端墓碑刪掉');
+  const remote = JSON.parse(client.store.gist.content);
+  assert.equal(remote.sighs.length, 2);
+  assert.deepEqual(remote.deleted, []);
+  assert.equal(state.settings.sync.force, false, '用過就關掉');
 });
