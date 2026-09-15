@@ -286,6 +286,137 @@ export function yesterdayReview(sighs, now = Date.now(), labelOf = (r) => String
   };
 }
 
+/** 某年某月（month 1–12）的範圍與天數。 */
+export function monthRange(year, month) {
+  const start = new Date(year, month - 1, 1).getTime();
+  const end = new Date(year, month, 1).getTime();
+  const days = new Date(year, month, 0).getDate();
+  return { start, end, days, label: `${year} 年 ${month} 月` };
+}
+
+function topReasons(list, labelOf, n = 3) {
+  return countsByReason(list)
+    .filter((r) => r.reason != null)
+    .slice(0, n)
+    .map((r) => ({ reason: r.reason, label: labelOf(r.reason), count: r.count, ratio: r.ratio }));
+}
+
+function busiestPeriodOf(list) {
+  const counts = new Map();
+  for (const s of list) {
+    const k = periodKey(new Date(s.t).getHours());
+    counts.set(k, (counts.get(k) || 0) + 1);
+  }
+  let best = null;
+  for (const p of PERIODS) {
+    const c = counts.get(p.key) || 0;
+    if (c && (!best || c > best.count)) best = { key: p.key, label: p.label, count: c };
+  }
+  return best;
+}
+
+/** 月報：某年某月，對比上個月。 */
+export function monthSummary(sighs, year, month, now = Date.now(), labelOf = (r) => String(r)) {
+  const range = monthRange(year, month);
+  const prevRange = monthRange(month === 1 ? year - 1 : year, month === 1 ? 12 : month - 1);
+  const list = sighs.filter((s) => s.t >= range.start && s.t < range.end);
+  const prevTotal = sighs.filter((s) => s.t >= prevRange.start && s.t < prevRange.end).length;
+  const map = countsByDayMap(list);
+  const days = [];
+  for (let d = 1; d <= range.days; d++) {
+    const t = new Date(year, month - 1, d).getTime();
+    days.push({ day: d, key: dayKey(t), start: t, count: map.get(dayKey(t)) || 0, future: t > now });
+  }
+  const maxDay = days.reduce((m, d) => (!m || d.count > m.count ? d : m), null);
+  const hours = countsByHour(list);
+  const isCurrent = now >= range.start && now < range.end;
+  const elapsedDays = isCurrent ? Math.max(1, Math.round((startOfDay(now) - range.start) / DAY_MS) + 1) : range.days;
+  const total = list.length;
+  return {
+    year,
+    month,
+    label: range.label,
+    isCurrent,
+    days,
+    total,
+    prevTotal,
+    diff: total - prevTotal,
+    avgPerDay: total / elapsedDays,
+    maxDay: maxDay && maxDay.count ? maxDay : null,
+    topReasons: topReasons(list, labelOf),
+    busiestHour: total ? hours.indexOf(Math.max(...hours)) : null,
+    busiestPeriod: busiestPeriodOf(list),
+    longestCalm: total ? calmGaps(list, Math.min(now, range.end - 1)).longest : null,
+    activeDays: days.filter((d) => d.count).length,
+    noteCount: list.filter((s) => s.n).length,
+    longCount: list.filter((s) => s.i === 2).length,
+  };
+}
+
+/** 一年裡最長的一段連續沒嘆氣（天數與起訖），從該年第一天或第一筆紀錄起算到今天／年底。 */
+export function longestCalmRun(sighs, year, now = Date.now()) {
+  if (!sighs.length) return { days: 0, from: null, to: null };
+  const yearStart = new Date(year, 0, 1).getTime();
+  const yearEnd = new Date(year + 1, 0, 1).getTime();
+  const first = startOfDay(sighs[0].t);
+  const from = Math.max(yearStart, first);
+  const last = Math.min(startOfDay(now), yearEnd - 1);
+  if (from > last) return { days: 0, from: null, to: null };
+  const map = countsByDayMap(sighs);
+  let best = { days: 0, from: null, to: null };
+  let run = 0;
+  let runStart = null;
+  for (let d = from; d <= last; d = addDays(d, 1)) {
+    if (map.get(dayKey(d))) {
+      run = 0;
+      runStart = null;
+      continue;
+    }
+    if (!run) runStart = d;
+    run++;
+    if (run > best.days) best = { days: run, from: runStart, to: d };
+  }
+  return best;
+}
+
+/** 年度回顧。 */
+export function yearSummary(sighs, year, now = Date.now(), labelOf = (r) => String(r)) {
+  const start = new Date(year, 0, 1).getTime();
+  const end = new Date(year + 1, 0, 1).getTime();
+  const list = sighs.filter((s) => s.t >= start && s.t < end);
+  const total = list.length;
+  const months = Array.from({ length: 12 }, (_, i) => ({ month: i + 1, count: 0 }));
+  for (const s of list) months[new Date(s.t).getMonth()].count++;
+  const busiestMonth = total ? months.reduce((m, x) => (x.count > m.count ? x : m), months[0]) : null;
+  const dayMap = countsByDayMap(list);
+  let maxDay = null;
+  for (const [key, count] of dayMap) if (!maxDay || count > maxDay.count) maxDay = { key, count };
+  const grid = weekdayPeriodGrid(list);
+  const hours = countsByHour(list);
+  const isCurrent = now >= start && now < end;
+  const elapsedDays = isCurrent ? Math.max(1, Math.round((startOfDay(now) - start) / DAY_MS) + 1) : Math.round((end - start) / DAY_MS);
+  return {
+    year,
+    label: `${year} 年`,
+    isCurrent,
+    total,
+    months,
+    busiestMonth,
+    maxDay,
+    busiestWeekday: grid.busiestWeekday,
+    busiestCell: grid.busiest ? { weekday: grid.busiest.weekday, period: PERIODS.find((p) => p.key === grid.busiest.period).label } : null,
+    busiestHour: total ? hours.indexOf(Math.max(...hours)) : null,
+    busiestPeriod: busiestPeriodOf(list),
+    topReasons: topReasons(list, labelOf),
+    calmRun: longestCalmRun(sighs, year, now),
+    activeDays: dayMap.size,
+    avgPerDay: total / elapsedDays,
+    noteCount: list.filter((s) => s.n).length,
+    longCount: list.filter((s) => s.i === 2).length,
+    firstKey: total ? dayKey(list[0].t) : null,
+  };
+}
+
 /** 週報用的摘要：最近 7 天（含今天）對比前 7 天。 */
 export function weekSummary(sighs, now = Date.now(), labelOf = (r) => String(r)) {
   const fortnight = countsByDay(sighs, 14, now);

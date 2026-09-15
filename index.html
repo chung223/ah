@@ -208,10 +208,22 @@
           <ul class="insight-list" id="insight-list"></ul>
         </article>
         <article class="card card-report">
-          <h3>週報</h3>
-          <p class="sub">把最近 7 天做成一張圖，存下來或傳給朋友。</p>
+          <div class="report-head">
+            <h3>報告</h3>
+            <div class="seg" id="report-kind" role="group" aria-label="報告種類">
+              <button type="button" data-kind="week" aria-pressed="true">週報</button>
+              <button type="button" data-kind="month" aria-pressed="false">月報</button>
+              <button type="button" data-kind="year" aria-pressed="false">年度</button>
+            </div>
+          </div>
+          <p class="sub">做成一張圖，存下來或傳給朋友。</p>
+          <div class="report-nav" id="report-nav" hidden>
+            <button type="button" class="icon-mini" id="report-prev" aria-label="上一個">‹</button>
+            <span id="report-label"></span>
+            <button type="button" class="icon-mini" id="report-next" aria-label="下一個">›</button>
+          </div>
           <div class="btn-row report-actions">
-            <button type="button" class="btn" id="report-make">產生這週的週報</button>
+            <button type="button" class="btn" id="report-make">產生週報</button>
             <span class="sub" id="report-status"></span>
           </div>
           <div id="report-preview" hidden>
