@@ -1113,6 +1113,7 @@ input[type="range"] {
   font-variation-settings: "opsz" 72, "SOFT" 50;
   font-size: 30px;
   line-height: 1.15;
+  word-break: keep-all;
 }
 
 .t-val small {
@@ -2112,4 +2113,41 @@ input[type="range"] {
 
 .sc-steps .btn {
   margin-top: 4px;
+}
+
+/* 報告卡：種類切換與翻頁 */
+.report-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.report-head h3 {
+  margin-bottom: 8px;
+}
+
+.report-head .seg {
+  margin-bottom: 8px;
+}
+
+.report-nav {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 10px 0 4px;
+}
+
+#report-label {
+  min-width: 8.5em;
+  text-align: center;
+  font-family: var(--font-serif);
+  font-size: 15px;
+}
+
+.report-nav .icon-mini {
+  font-size: 16px;
+  line-height: 1;
+  padding: 3px 11px;
 }

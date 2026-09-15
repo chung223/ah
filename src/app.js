@@ -22,6 +22,8 @@ import {
   weekdayPeriodGrid,
   yearGrid,
   weekSummary,
+  monthSummary,
+  yearSummary,
   streaks,
   yesterdayReview,
 } from './stats.js';
@@ -39,7 +41,7 @@ import {
 } from './reasons.js';
 import { shouldSuggestBreathing, recentCount, createBreathSession } from './breath.js';
 import { createGistClient, syncOnce } from './sync.js';
-import { drawReport, reportFilename } from './report.js';
+import { drawReport, drawMonthReport, drawYearReport, reportFilename } from './report.js';
 
 const FLOAT_WORDS = ['唉', '唉～', '呼…', '哎', '嗯…', '唉。'];
 const LONG_FLOAT_WORDS = ['唉～～～', '呼……', '唉……'];
@@ -69,6 +71,11 @@ let syncTimer = null;
 let syncing = false;
 let reportCanvas = null;
 let reportBlob = null;
+let reportData = null;
+let reportKind = 'week';
+let reportYear = new Date().getFullYear();
+let reportMonth = new Date().getMonth() + 1;
+let reportYearOnly = new Date().getFullYear();
 let updateOffered = false;
 let pressTimer = null;
 let longPressed = false;
@@ -135,6 +142,11 @@ const ui = {
   weekPeriod: $('#week-period'),
   weekPeriodSummary: $('#week-period-summary'),
   reportMake: $('#report-make'),
+  reportKindSeg: $('#report-kind'),
+  reportNav: $('#report-nav'),
+  reportPrev: $('#report-prev'),
+  reportNext: $('#report-next'),
+  reportLabel: $('#report-label'),
   reportPreview: $('#report-preview'),
   reportImg: $('#report-img'),
   reportShare: $('#report-share'),
@@ -542,6 +554,7 @@ function renderStats({ animate = true } = {}) {
   renderYearHeat();
   renderWeekPeriod();
   renderNotes();
+  renderReportNav();
 }
 
 /* ---------- 設定頁 ---------- */
@@ -1152,19 +1165,76 @@ function disconnectSync() {
   toast('已移除 token，紀錄仍留在這台裝置上');
 }
 
-/* ---------- 週報 ---------- */
+/* ---------- 報告：週報、月報、年度回顧 ---------- */
+
+function earliestYearMonth() {
+  const first = state.sighs.length ? new Date(state.sighs[0].t) : new Date();
+  return { year: first.getFullYear(), month: first.getMonth() + 1 };
+}
+
+function renderReportNav() {
+  const now = new Date();
+  const cy = now.getFullYear();
+  const cm = now.getMonth() + 1;
+  const first = earliestYearMonth();
+  $$('button', ui.reportKindSeg).forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.kind === reportKind)));
+  ui.reportNav.hidden = reportKind === 'week';
+  if (reportKind === 'month') {
+    ui.reportLabel.textContent = `${reportYear} 年 ${reportMonth} 月`;
+    ui.reportNext.disabled = reportYear === cy && reportMonth === cm;
+    ui.reportPrev.disabled = reportYear * 12 + reportMonth <= first.year * 12 + first.month;
+  } else if (reportKind === 'year') {
+    ui.reportLabel.textContent = `${reportYearOnly} 年`;
+    ui.reportNext.disabled = reportYearOnly >= cy;
+    ui.reportPrev.disabled = reportYearOnly <= first.year;
+  }
+  ui.reportMake.textContent = { week: '產生週報', month: '產生月報', year: '產生年度回顧' }[reportKind];
+}
+
+function setReportKind(kind) {
+  reportKind = kind;
+  ui.reportPreview.hidden = true;
+  ui.reportStatus.textContent = '';
+  renderReportNav();
+}
+
+function stepReport(dir) {
+  if (reportKind === 'month') {
+    let m = reportMonth + dir;
+    let y = reportYear;
+    if (m < 1) {
+      m = 12;
+      y--;
+    } else if (m > 12) {
+      m = 1;
+      y++;
+    }
+    reportYear = y;
+    reportMonth = m;
+  } else if (reportKind === 'year') {
+    reportYearOnly += dir;
+  }
+  ui.reportPreview.hidden = true;
+  ui.reportStatus.textContent = '';
+  renderReportNav();
+}
 
 async function makeReport() {
   ui.reportStatus.textContent = '產生中…';
   ui.reportMake.disabled = true;
   try {
-    const data = weekSummary(state.sighs, Date.now(), labelOf);
     reportCanvas = reportCanvas || document.createElement('canvas');
-    await drawReport(reportCanvas, data, {
-      theme: effectiveTheme(),
-      url: `${location.origin}${location.pathname}`,
-      quote: pickQuote(),
-    });
+    const drawOpts = { theme: effectiveTheme(), url: `${location.origin}${location.pathname}`, quote: pickQuote() };
+    if (reportKind === 'month') {
+      reportData = { ...monthSummary(state.sighs, reportYear, reportMonth, Date.now(), labelOf), kind: 'month' };
+      await drawMonthReport(reportCanvas, reportData, drawOpts);
+    } else if (reportKind === 'year') {
+      reportData = { ...yearSummary(state.sighs, reportYearOnly, Date.now(), labelOf), kind: 'year' };
+      await drawYearReport(reportCanvas, reportData, drawOpts);
+    } else {
+      reportData = { ...weekSummary(state.sighs, Date.now(), labelOf), kind: 'week' };
+      await drawReport(reportCanvas, reportData, drawOpts);
+    }
     reportBlob = await new Promise((resolve) => reportCanvas.toBlob(resolve, 'image/png'));
     ui.reportImg.src = reportCanvas.toDataURL('image/png');
     ui.reportPreview.hidden = false;
@@ -1187,9 +1257,9 @@ async function makeReport() {
 
 async function shareReport() {
   if (!reportBlob) return;
-  const file = new File([reportBlob], reportFilename(), { type: 'image/png' });
+  const file = new File([reportBlob], reportFilename(reportData || {}), { type: 'image/png' });
   try {
-    await navigator.share({ files: [file], title: '嘆氣週報' });
+    await navigator.share({ files: [file], title: { month: '嘆氣月報', year: '嘆氣年度回顧' }[reportKind] || '嘆氣週報' });
   } catch (err) {
     if (!err || err.name !== 'AbortError') toast('分享失敗，改用「儲存圖片」吧');
   }
@@ -1197,7 +1267,7 @@ async function shareReport() {
 
 function saveReport() {
   if (!reportBlob) return;
-  download(reportFilename(), reportBlob, 'image/png');
+  download(reportFilename(reportData || {}), reportBlob, 'image/png');
 }
 
 /* ---------- 分頁 ---------- */
@@ -1334,6 +1404,12 @@ function bindEvents() {
   });
   ui.noteSearch.addEventListener('input', renderNotes);
   ui.reportMake.addEventListener('click', makeReport);
+  ui.reportKindSeg.addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-kind]');
+    if (b) setReportKind(b.dataset.kind);
+  });
+  ui.reportPrev.addEventListener('click', () => stepReport(-1));
+  ui.reportNext.addEventListener('click', () => stepReport(1));
   ui.reportShare.addEventListener('click', shareReport);
   ui.reportSave.addEventListener('click', saveReport);
 

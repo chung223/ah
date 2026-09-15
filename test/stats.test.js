@@ -21,6 +21,10 @@ import {
   PERIODS,
   streaks,
   yesterdayReview,
+  monthRange,
+  monthSummary,
+  longestCalmRun,
+  yearSummary,
 } from '../src/stats.js';
 
 // 全部用本機時間建構，測試不依賴時區。
@@ -262,4 +266,61 @@ test('yesterdayReview', () => {
 test('summary 會數長嘆', () => {
   const s = summary([{ t: at(2026, 9, 15, 9), i: 2 }, { t: at(2026, 9, 15, 10) }], now);
   assert.equal(s.longCount, 1);
+});
+
+test('monthRange 與 monthSummary', () => {
+  const r = monthRange(2026, 2);
+  assert.equal(r.days, 28);
+  assert.equal(r.label, '2026 年 2 月');
+  assert.equal(monthRange(2024, 2).days, 29);
+
+  const m = monthSummary(sighs, 2026, 9, now, label);
+  assert.equal(m.total, 5);
+  assert.equal(m.days.length, 30);
+  assert.equal(m.isCurrent, true);
+  assert.equal(m.days[14].count, 2, '9/15');
+  assert.equal(m.days[29].future, true, '9/30 還沒到');
+  assert.deepEqual({ day: m.maxDay.day, count: m.maxDay.count }, { day: 15, count: 2 });
+  assert.equal(m.topReasons[0].label, '工作');
+  assert.equal(m.topReasons[0].count, 3);
+  assert.equal(m.prevTotal, 0);
+  assert.equal(m.diff, 5);
+  assert.equal(m.busiestHour, 14);
+  assert.equal(m.busiestPeriod.label, '早上', '早上與下午各 2 次，平手時取順序最前面的');
+  assert.equal(m.activeDays, 4);
+  assert.ok(Math.abs(m.avgPerDay - 5 / 15) < 1e-9, '本月到今天為止 15 天');
+  const empty = monthSummary([], 2026, 8, now, label);
+  assert.equal(empty.total, 0);
+  assert.equal(empty.maxDay, null);
+  assert.equal(empty.longestCalm, null);
+  assert.equal(empty.isCurrent, false);
+  assert.ok(Math.abs(empty.avgPerDay) < 1e-9);
+});
+
+test('longestCalmRun 與 yearSummary', () => {
+  // 9/10、9/12、9/14、9/15 有紀錄 → 最長空檔是 9/11 或 9/13（各 1 天）
+  const run = longestCalmRun(sighs, 2026, now);
+  assert.equal(run.days, 1);
+  const spread = [{ t: at(2026, 3, 1, 9) }, { t: at(2026, 3, 20, 9) }, { t: at(2026, 9, 15, 9) }];
+  const run2 = longestCalmRun(spread, 2026, now);
+  assert.equal(run2.days, 178, '3/21 到 9/14');
+  assert.equal(dayKey(run2.from), '2026-03-21');
+  assert.equal(dayKey(run2.to), '2026-09-14');
+  assert.equal(longestCalmRun([], 2026, now).days, 0);
+
+  const y = yearSummary(sighs, 2026, now, label);
+  assert.equal(y.total, 5);
+  assert.equal(y.months.length, 12);
+  assert.equal(y.months[8].count, 5, '九月');
+  assert.equal(y.busiestMonth.month, 9);
+  assert.deepEqual(y.maxDay, { key: '2026-09-15', count: 2 });
+  assert.equal(y.busiestWeekday, 2);
+  assert.equal(y.busiestCell.weekday, 1, '每格都是 1 次，平手時取順序最前面的（星期一深夜）');
+  assert.equal(y.busiestCell.period, '深夜');
+  assert.equal(y.topReasons[0].label, '工作');
+  assert.equal(y.activeDays, 4);
+  assert.equal(y.firstKey, '2026-09-10');
+  assert.equal(y.isCurrent, true);
+  assert.equal(yearSummary(sighs, 2025, now, label).total, 0);
+  assert.equal(yearSummary([], 2026, now, label).busiestMonth, null);
 });
