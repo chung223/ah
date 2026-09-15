@@ -1,0 +1,14 @@
+{
+  "name": "ah-sigh-counter",
+  "version": "1.0.0",
+  "private": true,
+  "description": "唉 · 嘆氣計數器：一個安靜的嘆氣記錄網頁，資料只存在本機。",
+  "type": "module",
+  "scripts": {
+    "start": "node scripts/serve.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
