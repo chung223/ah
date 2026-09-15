@@ -126,6 +126,11 @@ button {
   outline-offset: 3px;
 }
 
+/* 任何元素只要有 hidden 屬性就一定藏起來，不讓 .btn 之類的 display 蓋過 */
+[hidden] {
+  display: none !important;
+}
+
 .sr-only {
   position: absolute;
   width: 1px;
@@ -476,6 +481,7 @@ button {
   cursor: pointer;
   user-select: none;
   -webkit-user-select: none;
+  -webkit-touch-callout: none;
   touch-action: manipulation;
   -webkit-tap-highlight-color: transparent;
   background: radial-gradient(circle at 36% 30%, #ffdcab 0%, var(--amber) 42%, var(--amber-2) 100%);
@@ -2000,4 +2006,110 @@ input[type="range"] {
     flex-wrap: wrap;
     justify-content: center;
   }
+}
+
+/* ==========================================================================
+   第三批：長嘆、昨天回顧、復原、捷徑說明
+   ========================================================================== */
+
+.sigh-btn.is-long {
+  transform: scale(1.06);
+  box-shadow:
+    0 0 0 22px var(--amber-soft),
+    0 30px 70px -18px rgba(240, 179, 101, 0.7),
+    0 0 140px var(--amber-glow),
+    inset 0 -18px 34px rgba(110, 55, 0, 0.28),
+    inset 0 14px 28px rgba(255, 255, 255, 0.4);
+}
+
+.float.big {
+  font-size: 44px;
+  letter-spacing: 0.04em;
+}
+
+.ring.long {
+  border-width: 3px;
+  animation-duration: 1.7s;
+}
+
+.recent-auto.is-long {
+  color: var(--rose);
+  border-color: rgba(226, 161, 161, 0.4);
+}
+
+.recent-auto.is-sc {
+  color: var(--ink-2);
+  border-color: var(--line-strong);
+}
+
+.review-card {
+  margin: 8px 0 4px;
+  border-color: var(--amber-glow);
+  animation: rise 0.6s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+
+.review-main {
+  margin: 0 0 10px;
+  font-family: var(--font-serif);
+  font-size: 17px;
+  line-height: 1.7;
+}
+
+.review-notes {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+  font-family: var(--font-serif);
+  color: var(--ink-2);
+  line-height: 1.7;
+}
+
+.review-notes:empty {
+  display: none;
+}
+
+.sc-help {
+  margin: 4px 0 8px;
+  padding: 4px 0;
+  border-top: 1px solid var(--line);
+}
+
+.sc-help summary {
+  padding: 12px 0;
+  cursor: pointer;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+}
+
+.sc-help .sub {
+  margin-bottom: 8px;
+}
+
+.sc-steps {
+  margin: 0 0 12px;
+  padding-left: 1.4em;
+  font-size: 14px;
+  line-height: 1.8;
+  color: var(--ink-2);
+}
+
+.sc-steps li {
+  margin-bottom: 6px;
+}
+
+.sc-steps code:not(.quick-url) {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12.5px;
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: var(--bg-3);
+  color: var(--ink);
+}
+
+.sc-steps .quick-url {
+  margin: 8px 0;
+}
+
+.sc-steps .btn {
+  margin-top: 4px;
 }

@@ -3,12 +3,55 @@
 // 合併規則：紀錄以時間戳為鍵取聯集，刪除用墓碑（deleted）傳播；
 // 標籤以代號取聯集，名稱與排序以本機為準。
 
+import { mergeSighs } from './storage.js';
+
 export const GIST_FILE = 'ah-sigh-counter.json';
 export const GIST_DESCRIPTION = '唉 · 嘆氣計數器 的資料備份（由 App 自動維護）';
 const API = 'https://api.github.com';
 
 function sighKey(s) {
   return s.t;
+}
+
+/**
+ * 捷徑寫進來的留言：「唉」「唉 工作」「唉 工作 客戶又改需求」「sigh money」。
+ * 第一個字若是觸發詞就略過；下一個字若對得上原因代號或名稱就當原因；其餘變成筆記。
+ */
+export function parseInboxComment(body, reasons = []) {
+  const tokens = String(body || '')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (tokens.length && /^(唉|嘆氣|嘆|sigh|ah)$/i.test(tokens[0])) tokens.shift();
+  let r = null;
+  if (tokens.length) {
+    const t = tokens[0];
+    const hit = reasons.find((x) => x.id && (x.id === t || x.label === t));
+    if (hit) {
+      r = hit.id;
+      tokens.shift();
+    } else if (/^(沒為什麼|none|null|-)$/i.test(t)) {
+      tokens.shift();
+    }
+  }
+  return { r, n: tokens.join(' ').slice(0, 200) };
+}
+
+/** 把 Gist 留言轉成紀錄。時間用留言建立時間，再用留言 id 錯開毫秒避免同秒撞號。 */
+export function inboxToSighs(comments, reasons = [], deleted = []) {
+  const dead = new Set(deleted);
+  const out = [];
+  for (const c of comments || []) {
+    const base = Date.parse(c && c.created_at);
+    if (!Number.isFinite(base)) continue;
+    const t = base + (Math.abs(Number(c.id) || 0) % 997);
+    if (dead.has(t)) continue;
+    const { r, n } = parseInboxComment(c.body, reasons);
+    const sigh = { t, r, s: 1 };
+    if (n) sigh.n = n;
+    out.push({ id: c.id, sigh });
+  }
+  return out;
 }
 
 /** 把本機與遠端的資料合併成一份。回傳合併結果與「本機／遠端是否需要更新」。 */
@@ -42,7 +85,7 @@ export function mergeData(local, remote) {
 
 export function serialize(data) {
   return JSON.stringify({
-    sighs: (data.sighs || []).map((s) => [s.t, s.r ?? null, s.a ? 1 : 0, s.n || '']),
+    sighs: (data.sighs || []).map((s) => [s.t, s.r ?? null, s.a ? 1 : 0, s.n || '', s.i === 2 ? 2 : 1, s.s ? 1 : 0]),
     deleted: [...(data.deleted || [])].sort((a, b) => a - b),
     customReasons: (data.customReasons || []).map((c) => [c.id, c.label]),
     reasonOrder: data.reasonOrder || null,
@@ -130,6 +173,21 @@ export function createGistClient(token, fetchFn = globalThis.fetch) {
     async updateGist(id, content) {
       await call('PATCH', `/gists/${id}`, { files: { [GIST_FILE]: { content } } });
     },
+    async listComments(id) {
+      return call('GET', `/gists/${id}/comments?per_page=100`);
+    },
+    async createComment(id, body) {
+      return call('POST', `/gists/${id}/comments`, { body });
+    },
+    async deleteComment(id, commentId) {
+      let res;
+      try {
+        res = await fetchFn(`${API}/gists/${id}/comments/${commentId}`, { method: 'DELETE', headers });
+      } catch {
+        throw new SyncError('network', '連不上 GitHub');
+      }
+      if (!res.ok && res.status !== 404) throw new SyncError('http', `GitHub 回應 ${res.status}`);
+    },
   };
 }
 
@@ -138,20 +196,23 @@ function contentFor(data, now) {
 }
 
 /**
- * 跑一次同步。會直接修改 state（sighs、deleted、customReasons、reasonOrder、sync.gistId、sync.lastSync）。
- * 回傳 { status: 'created' | 'pushed' | 'pulled' | 'both' | 'unchanged' }。
+ * 跑一次同步。會直接修改 state（sighs、deleted、customReasons、reasonOrder、sync.gistId、sync.lastSync、sync.force）。
+ * opts.reasons：原因清單 [{ id, label }]，用來解讀捷徑寫進來的留言。
+ * 回傳 { status: 'created' | 'pushed' | 'pulled' | 'both' | 'unchanged', gistId, inbox }。
  */
-export async function syncOnce(state, client, now = Date.now()) {
+export async function syncOnce(state, client, now = Date.now(), opts = {}) {
   const sync = state.settings.sync;
   if (!sync || !sync.token) throw new SyncError('noauth', '還沒設定 token');
-  const local = payloadFromState(state);
+  const original = payloadFromState(state);
+  let local = original;
 
   let gistId = sync.gistId || (await client.findGist());
   if (!gistId) {
     gistId = await client.createGist(contentFor(local, now));
     sync.gistId = gistId;
     sync.lastSync = now;
-    return { status: 'created', gistId };
+    sync.force = false;
+    return { status: 'created', gistId, inbox: 0 };
   }
 
   let remoteText;
@@ -165,13 +226,36 @@ export async function syncOnce(state, client, now = Date.now()) {
     sync.gistId = gistId;
     if (!found) {
       sync.lastSync = now;
-      return { status: 'created', gistId };
+      sync.force = false;
+      return { status: 'created', gistId, inbox: 0 };
     }
     remoteText = await client.readGist(gistId);
   }
 
+  // 收件匣：捷徑留在 Gist 上的留言，先併進本機
+  let inbox = [];
+  if (client.listComments) {
+    try {
+      inbox = inboxToSighs(await client.listComments(gistId), opts.reasons || [], original.deleted);
+    } catch {
+      inbox = [];
+    }
+  }
+  if (inbox.length) {
+    local = { ...original, sighs: mergeSighs(original.sighs, inbox.map((x) => x.sigh)) };
+  }
+
   const remote = parseRemote(remoteText) || { sighs: [], deleted: [], customReasons: [], reasonOrder: null };
-  const { merged, localChanged, remoteChanged } = mergeData(local, remote);
+  let merged;
+  let remoteChanged;
+  if (sync.force) {
+    // 復原「清除全部」之後：本機為準，整份覆蓋雲端，讓被撤掉的墓碑不再回來
+    merged = local;
+    remoteChanged = true;
+  } else {
+    ({ merged, remoteChanged } = mergeData(local, remote));
+  }
+  const localChanged = serialize(merged) !== serialize(original);
 
   if (localChanged) {
     state.sighs = merged.sighs;
@@ -181,8 +265,18 @@ export async function syncOnce(state, client, now = Date.now()) {
   }
   if (remoteChanged) await client.updateGist(gistId, contentFor(merged, now));
 
+  // 留言已經變成紀錄了，清掉；失敗也沒關係，下次會因時間戳相同而不重複
+  for (const x of inbox) {
+    try {
+      await client.deleteComment(gistId, x.id);
+    } catch {
+      /* 忽略 */
+    }
+  }
+
   sync.gistId = gistId;
   sync.lastSync = now;
+  sync.force = false;
   const status = localChanged && remoteChanged ? 'both' : localChanged ? 'pulled' : remoteChanged ? 'pushed' : 'unchanged';
-  return { status, gistId };
+  return { status, gistId, inbox: inbox.length };
 }

@@ -10,6 +10,7 @@ import {
   exportJSON,
   cleanNote,
   STORAGE_KEY,
+  TRASH_TTL,
 } from '../src/storage.js';
 
 function memStorage() {
@@ -72,13 +73,48 @@ test('舊版（v1）資料載入後補上新欄位', () => {
   const st = normalizeState({ v: 1, sighs: [{ t: 5, r: 'work' }], settings: { theme: 'dark' } });
   assert.equal(st.v, 2);
   assert.deepEqual(st.deleted, []);
+  assert.equal(st.trash, null);
   assert.equal(st.settings.badge, true);
   assert.equal(st.settings.reasonMode, 'manual');
   assert.deepEqual(st.settings.customReasons, []);
   assert.equal(st.settings.reasonOrder, null);
   assert.equal(st.settings.micProfile, null);
   assert.equal(st.settings.sync, null);
+  assert.equal(st.settings.lastReviewDay, null);
   assert.deepEqual(Object.keys(st.settings.periodReasons), ['morning', 'noon', 'afternoon', 'evening', 'night']);
+});
+
+test('長嘆、捷徑旗標與回收桶', () => {
+  const now = 1_000_000_000;
+  const st = normalizeState(
+    {
+      sighs: [
+        { t: 1, r: null, i: 2, s: 1 },
+        { t: 2, r: null, i: 1, s: 0 },
+      ],
+      trash: { at: now - 1000, sighs: [{ t: 9, r: 'work' }, { t: 3 }] },
+      settings: { lastReviewDay: '2026-09-15', sync: { token: 'x', force: true } },
+    },
+    now,
+  );
+  assert.deepEqual(st.sighs, [
+    { t: 1, r: null, i: 2, s: 1 },
+    { t: 2, r: null },
+  ]);
+  assert.deepEqual(st.trash, {
+    at: now - 1000,
+    sighs: [
+      { t: 3, r: null },
+      { t: 9, r: 'work' },
+    ],
+  });
+  assert.equal(st.settings.lastReviewDay, '2026-09-15');
+  assert.equal(st.settings.sync.force, true);
+
+  const expired = normalizeState({ trash: { at: now - TRASH_TTL - 1, sighs: [{ t: 9 }] } }, now);
+  assert.equal(expired.trash, null, '超過 24 小時就丟掉');
+  assert.equal(normalizeState({ trash: { at: now, sighs: [] } }, now).trash, null);
+  assert.equal(normalizeState({ settings: { lastReviewDay: 'bogus' } }).settings.lastReviewDay, null);
 });
 
 test('normalizeState 丟掉不合法的紀錄與設定', () => {
@@ -113,7 +149,7 @@ test('自訂標籤、時段、校正、同步設定的正規化', () => {
   assert.equal(st.settings.reasonMode, 'period');
   assert.deepEqual(st.settings.periodReasons, { morning: 'work', noon: null, afternoon: null, evening: null, night: 'c_abcd12' });
   assert.deepEqual(st.settings.micProfile, { minFlat: 0.1, riseDb: 8, minDur: 300, maxDur: 4500 });
-  assert.deepEqual(st.settings.sync, { token: 'tok', gistId: 'abc', lastSync: 123 });
+  assert.deepEqual(st.settings.sync, { token: 'tok', gistId: 'abc', lastSync: 123, force: false });
   assert.equal(st.sighs[0].r, 'c_abcd12', '紀錄上的自訂代號保留');
 
   const bad = normalizeState({ settings: { micProfile: { minFlat: 'x' }, sync: { token: '' } } });
@@ -132,10 +168,10 @@ test('儲存失敗（例如空間不足）回傳 false 而不丟錯', () => {
   assert.equal(store.save(defaultState()), false);
 });
 
-test('mergeSighs 以時間戳去重並排序，筆記不會被空的蓋掉', () => {
+test('mergeSighs 以時間戳去重並排序，筆記與旗標不會被空的蓋掉', () => {
   const merged = mergeSighs(
     [
-      { t: 100, r: null, n: '第一句' },
+      { t: 100, r: null, n: '第一句', i: 2 },
       { t: 200, r: 'work' },
     ],
     [
@@ -147,7 +183,7 @@ test('mergeSighs 以時間戳去重並排序，筆記不會被空的蓋掉', () 
   );
   assert.deepEqual(merged, [
     { t: 50, r: null },
-    { t: 100, r: null, n: '第一句' },
+    { t: 100, r: null, i: 2, n: '第一句' },
     { t: 200, r: 'money' },
   ]);
 });
@@ -171,12 +207,12 @@ test('exportJSON 帶有識別欄位', () => {
   assert.deepEqual(obj.sighs, [{ t: 1, r: null }]);
 });
 
-test('toCSV 有標題列（含筆記），會跳脫逗號與引號', () => {
-  const csv = toCSV([{ t: 1000, r: 'work', a: 1, n: '他說"再等等"' }], (r) => (r === 'work' ? '工作, "加班"' : '沒為什麼'));
+test('toCSV 有標題列（含筆記、長嘆、捷徑），會跳脫逗號與引號', () => {
+  const csv = toCSV([{ t: 1000, r: 'work', a: 1, n: '他說"再等等"', i: 2, s: 1 }], (r) => (r === 'work' ? '工作, "加班"' : '沒為什麼'));
   const lines = csv.trim().split('\n');
-  assert.equal(lines[0], 'timestamp,datetime,reason,reason_label,auto,note');
+  assert.equal(lines[0], 'timestamp,datetime,reason,reason_label,auto,note,long,shortcut');
   assert.ok(lines[1].startsWith('1000,'));
-  assert.ok(lines[1].endsWith(',work,"工作, ""加班""",1,"他說""再等等"""'), lines[1]);
+  assert.ok(lines[1].endsWith(',work,"工作, ""加班""",1,"他說""再等等""",1,1'), lines[1]);
   assert.equal(toCSV([]).trim().split('\n').length, 1);
 });
 

@@ -1,7 +1,7 @@
 // 主程式：把資料層（storage）、統計（stats）、偵測器（detector）等接到畫面上。
 // 所有 DOM 操作都集中在這裡；其他模組不碰畫面。
 
-import { createStore, mergeSighs, parseImport, toCSV, exportJSON, cleanNote } from './storage.js';
+import { createStore, mergeSighs, parseImport, toCSV, exportJSON, cleanNote, TRASH_TTL } from './storage.js';
 import {
   countToday,
   countsByDay,
@@ -22,6 +22,8 @@ import {
   weekdayPeriodGrid,
   yearGrid,
   weekSummary,
+  streaks,
+  yesterdayReview,
 } from './stats.js';
 import { pickQuote, pickIdleLine, milestoneMessage } from './quotes.js';
 import { SighListener, profileFromSamples } from './detector.js';
@@ -40,6 +42,8 @@ import { createGistClient, syncOnce } from './sync.js';
 import { drawReport, reportFilename } from './report.js';
 
 const FLOAT_WORDS = ['唉', '唉～', '呼…', '哎', '嗯…', '唉。'];
+const LONG_FLOAT_WORDS = ['唉～～～', '呼……', '唉……'];
+const LONG_PRESS_MS = 450;
 const THEME_COLORS = { dark: '#0d1120', light: '#f4eee3' };
 const HOUR = 3_600_000;
 
@@ -65,6 +69,10 @@ let syncTimer = null;
 let syncing = false;
 let reportCanvas = null;
 let reportBlob = null;
+let updateOffered = false;
+let pressTimer = null;
+let longPressed = false;
+let suppressClick = false;
 
 const labelOf = (id) => labelFor(state.settings, id);
 const reasonList = () => orderedReasons(state.settings);
@@ -92,6 +100,11 @@ const ui = {
   weekTotal: $('#week-total'),
   calmNow: $('#calm-now'),
   calmLongest: $('#calm-longest'),
+  calmStreak: $('#calm-streak'),
+  reviewCard: $('#review-card'),
+  reviewMain: $('#review-main'),
+  reviewNotes: $('#review-notes'),
+  reviewOk: $('#review-ok'),
   totalCount: $('#total-count'),
   shareBtn: $('#share-btn'),
 
@@ -141,6 +154,8 @@ const ui = {
   exportCsv: $('#export-csv'),
   importFile: $('#import-file'),
   clearAll: $('#clear-all'),
+  restoreTrash: $('#restore-trash'),
+  restoreHint: $('#restore-hint'),
   reasonManage: $('#reason-manage'),
   reasonNew: $('#reason-new'),
   reasonAdd: $('#reason-add'),
@@ -153,6 +168,12 @@ const ui = {
   syncStatus: $('#sync-status'),
   syncNow: $('#sync-now'),
   syncDisconnect: $('#sync-disconnect'),
+  shortcutHelp: $('#shortcut-help'),
+  scUrl: $('#sc-url'),
+  copyScUrl: $('#copy-sc-url'),
+  copyScToken: $('#copy-sc-token'),
+  scTest: $('#sc-test'),
+  scStatus: $('#sc-status'),
 
   quickOverlay: $('#quick-overlay'),
   quickCount: $('#quick-count'),
@@ -334,6 +355,8 @@ function renderCalm() {
   ui.calmNow.textContent = current == null ? '—' : formatDuration(current);
   ui.calmLongest.textContent = state.sighs.length ? formatDuration(longest) : '—';
   ui.totalCount.textContent = String(state.sighs.length);
+  const st = streaks(state.sighs);
+  ui.calmStreak.textContent = state.sighs.length ? `${st.calmDays} 天` : '—';
 }
 
 function renderRecent() {
@@ -345,7 +368,7 @@ function renderRecent() {
       <li class="recent-item" data-t="${s.t}">
         <span class="recent-time">${formatTime(s.t)}</span>
         <select class="select recent-reason" aria-label="這次嘆氣的原因">${reasonOptions(s.r)}</select>
-        ${s.a ? '<span class="recent-auto" title="麥克風自動偵測">自動</span>' : ''}
+        ${s.i === 2 ? '<span class="recent-auto is-long" title="長嘆">長嘆</span>' : ''}${s.a ? '<span class="recent-auto" title="麥克風自動偵測">自動</span>' : ''}${s.s ? '<span class="recent-auto is-sc" title="從捷徑寫入">捷徑</span>' : ''}
         <button class="recent-del" type="button" aria-label="刪除這筆紀錄">×</button>
         <div class="recent-note">
           <button type="button" class="note-edit${s.n ? ' has-note' : ''}">${s.n ? `「${esc(s.n)}」` : '加一句'}</button>
@@ -497,6 +520,7 @@ function renderStats({ animate = true } = {}) {
         .join('')
     : '<li class="muted">還沒有資料</li>';
 
+  const st = streaks(state.sighs);
   const tile = (label, val, unit = '') =>
     `<div class="tile"><div class="t-label">${label}</div><div class="t-val">${val}${unit ? `<small>${unit}</small>` : ''}</div></div>`;
   ui.records.innerHTML = [
@@ -506,6 +530,9 @@ function renderStats({ animate = true } = {}) {
     tile('最多的一天', s.maxDay ? s.maxDay.count : '—', s.maxDay ? `次 · ${shortDate(s.maxDay.key)}` : ''),
     tile('最長平靜', s.total ? formatDuration(s.longestCalm) : '—'),
     tile('目前已平靜', s.total ? formatDuration(s.currentCalm) : '—'),
+    tile('連續沒嘆氣', s.total ? st.calmDays : '—', s.total ? '天' : ''),
+    tile('連續記錄', s.total ? st.recordDays : '—', s.total ? '天' : ''),
+    tile('長嘆', s.longCount, '次'),
   ].join('');
 
   ui.insightList.innerHTML = insights(state.sighs, Date.now(), labelOf)
@@ -568,6 +595,19 @@ function renderSyncCard() {
   ui.syncSetup.hidden = !!cfg;
   ui.syncConnected.hidden = !cfg;
   setSyncStatus();
+  ui.scUrl.textContent = cfg && cfg.gistId ? `https://api.github.com/gists/${cfg.gistId}/comments` : '（第一次同步完成後會出現）';
+  ui.scTest.disabled = !(cfg && cfg.gistId);
+}
+
+function renderTrash() {
+  const tr = state.trash;
+  const alive = tr && Date.now() - tr.at < TRASH_TTL;
+  ui.restoreTrash.hidden = !alive;
+  ui.restoreHint.hidden = !alive;
+  if (alive) {
+    const left = Math.max(1, Math.round((TRASH_TTL - (Date.now() - tr.at)) / 3_600_000));
+    ui.restoreHint.textContent = `剛清掉的 ${tr.sighs.length} 筆還留著，${left} 小時內可以復原。`;
+  }
 }
 
 function renderSettings() {
@@ -580,6 +620,7 @@ function renderSettings() {
   renderReasonManage();
   renderPeriodList();
   renderSyncCard();
+  renderTrash();
 }
 
 function renderAll() {
@@ -594,11 +635,12 @@ function renderAll() {
 
 /* ---------- 動畫效果 ---------- */
 
-function spawnFloat() {
+function spawnFloat(long = false) {
   if (reduceMotion()) return;
   const el = document.createElement('span');
-  el.className = 'float';
-  el.textContent = FLOAT_WORDS[Math.floor(Math.random() * FLOAT_WORDS.length)];
+  el.className = long ? 'float big' : 'float';
+  const words = long ? LONG_FLOAT_WORDS : FLOAT_WORDS;
+  el.textContent = words[Math.floor(Math.random() * words.length)];
   el.style.setProperty('--dx', `${Math.round(Math.random() * 90 - 45)}px`);
   el.style.setProperty('--rot', `${Math.round(Math.random() * 30 - 15)}deg`);
   ui.floatLayer.appendChild(el);
@@ -607,10 +649,10 @@ function spawnFloat() {
   setTimeout(remove, 2500);
 }
 
-function spawnRing() {
+function spawnRing(long = false) {
   if (reduceMotion()) return;
   const el = document.createElement('i');
-  el.className = 'ring';
+  el.className = long ? 'ring long' : 'ring';
   ui.stage.appendChild(el);
   const remove = () => el.remove();
   el.addEventListener('animationend', remove);
@@ -652,23 +694,24 @@ function afterChange() {
   scheduleSync();
 }
 
-function addSigh({ auto = false, reason, quiet = false } = {}) {
+function addSigh({ auto = false, reason, quiet = false, intensity = 1 } = {}) {
   const t = Date.now();
   const sigh = { t, r: reason === undefined ? state.settings.reason : reason };
   if (auto) sigh.a = 1;
+  if (intensity === 2) sigh.i = 2;
   state.sighs.push(sigh);
   const prev = state.sighs[state.sighs.length - 2];
   if (prev && prev.t > t) state.sighs.sort((a, b) => a.t - b.t);
   afterChange();
 
   bumpCount();
-  spawnRing();
-  spawnFloat();
+  spawnRing(intensity === 2);
+  spawnFloat(intensity === 2);
   ui.quote.textContent = pickQuote();
   const milestone = milestoneMessage(state.sighs.length);
   if (milestone) toast(milestone, { ms: 4200 });
   else if (!quiet) {
-    toast(`今天第 ${countToday(state.sighs)} 次`, {
+    toast(`今天第 ${countToday(state.sighs)} 次${intensity === 2 ? '，長嘆' : ''}`, {
       ms: 3200,
       actions: [
         { label: '撤銷', onClick: undoLast },
@@ -679,7 +722,7 @@ function addSigh({ auto = false, reason, quiet = false } = {}) {
   // 音效與震動只在使用者碰過頁面之後才做；用快速網址開頁時瀏覽器會擋。
   const interacted = !navigator.userActivation || navigator.userActivation.hasBeenActive;
   if (state.settings.sound && interacted) playExhale();
-  if (!auto && interacted && navigator.vibrate) navigator.vibrate(12);
+  if (!auto && interacted && navigator.vibrate) navigator.vibrate(intensity === 2 ? [20, 40, 30] : 12);
   maybeSuggestBreathing();
   return sigh;
 }
@@ -736,11 +779,67 @@ function clearAll() {
   const extra = state.settings.sync ? '雲端備份也會跟著清空。' : '';
   const ok = window.confirm(`確定要清除全部 ${state.sighs.length} 筆紀錄嗎？這無法復原。${extra}`);
   if (!ok) return;
+  const n = state.sighs.length;
+  state.trash = { at: Date.now(), sighs: state.sighs };
   for (const s of state.sighs) tombstone(s.t);
   state.sighs = [];
   afterChange();
   ui.quote.textContent = pickIdleLine();
-  toast('已清除所有紀錄');
+  toast(`已清除 ${n} 筆`, { ms: 10000, actions: [{ label: '復原', onClick: restoreTrash }] });
+}
+
+function restoreTrash() {
+  const tr = state.trash;
+  if (!tr || Date.now() - tr.at > TRASH_TTL) {
+    toast('已經超過可以復原的時間');
+    state.trash = null;
+    persist();
+    renderTrash();
+    return;
+  }
+  const ts = new Set(tr.sighs.map((s) => s.t));
+  state.deleted = state.deleted.filter((t) => !ts.has(t));
+  state.sighs = mergeSighs(state.sighs, tr.sighs);
+  state.trash = null;
+  // 雲端可能已經收到墓碑，下一次同步整份以本機為準
+  if (state.settings.sync) state.settings.sync.force = true;
+  afterChange();
+  if (countToday(state.sighs)) ui.quote.textContent = pickQuote();
+  toast(`已復原 ${tr.sighs.length} 筆`);
+}
+
+/* ---------- 昨天回顧 ---------- */
+
+function maybeShowReview() {
+  const today = dayKey(Date.now());
+  if (state.settings.lastReviewDay === today || !state.sighs.length) {
+    ui.reviewCard.hidden = true;
+    return;
+  }
+  const r = yesterdayReview(state.sighs, Date.now(), labelOf);
+  if (!r.count && !r.weekCount) {
+    ui.reviewCard.hidden = true;
+    return;
+  }
+  const st = streaks(state.sighs);
+  let text;
+  if (r.count) {
+    text = `昨天嘆了 ${r.count} 次${r.longCount ? `，其中 ${r.longCount} 次是長嘆` : ''}。`;
+    if (r.topReason) text += `最常因為「${r.topReason}」`;
+    if (r.busiestPeriod) text += `${r.topReason ? '，' : ''}多半在${r.busiestPeriod}`;
+    if (r.topReason || r.busiestPeriod) text += '。';
+  } else {
+    text = st.calmDays > 1 ? `昨天一次都沒嘆，已經連續 ${st.calmDays} 天了。` : '昨天一次都沒嘆。';
+  }
+  ui.reviewMain.textContent = text;
+  ui.reviewNotes.innerHTML = r.notes.map((n) => `<li>「${esc(n)}」</li>`).join('');
+  ui.reviewCard.hidden = false;
+}
+
+function dismissReview() {
+  state.settings.lastReviewDay = dayKey(Date.now());
+  persist();
+  ui.reviewCard.hidden = true;
 }
 
 async function importFromFile(file) {
@@ -985,11 +1084,12 @@ async function runSync({ silent = false } = {}) {
   syncing = true;
   setSyncStatus('同步中…');
   try {
-    const res = await syncOnce(state, createGistClient(cfg.token));
+    const res = await syncOnce(state, createGistClient(cfg.token), Date.now(), { reasons: reasonList() });
     persist();
     renderAll();
     updateBadge();
-    if (!silent) {
+    if (res.inbox) toast(`從捷徑收到 ${res.inbox} 筆`);
+    else if (!silent) {
       toast(
         {
           created: '已建立雲端備份',
@@ -1026,6 +1126,23 @@ async function connectSync() {
   renderSyncCard();
   await runSync();
   if (state.settings.sync) ui.syncToken.value = '';
+}
+
+async function sendShortcutTest() {
+  const cfg = state.settings.sync;
+  if (!cfg || !cfg.gistId) return;
+  ui.scTest.disabled = true;
+  ui.scStatus.textContent = '送出中…';
+  try {
+    await createGistClient(cfg.token).createComment(cfg.gistId, '唉 測試 從設定頁送的');
+    ui.scStatus.textContent = '已送出，正在同步回來…';
+    await runSync({ silent: true });
+    ui.scStatus.textContent = '完成。「最近」清單裡應該多了一筆「捷徑」。';
+  } catch (err) {
+    ui.scStatus.textContent = `失敗：${err && err.message ? err.message : '未知錯誤'}`;
+  } finally {
+    ui.scTest.disabled = !(state.settings.sync && state.settings.sync.gistId);
+  }
 }
 
 function disconnectSync() {
@@ -1107,9 +1224,47 @@ function showView(name) {
 
 /* ---------- 事件 ---------- */
 
+function cancelPress() {
+  clearTimeout(pressTimer);
+  pressTimer = null;
+  longPressed = false;
+  ui.sighBtn.classList.remove('is-long');
+}
+
 function bindEvents() {
-  ui.sighBtn.addEventListener('click', () => addSigh());
+  // 按一下＝嘆氣；長按＝長嘆
+  ui.sighBtn.addEventListener('pointerdown', (e) => {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    cancelPress();
+    pressTimer = setTimeout(() => {
+      longPressed = true;
+      ui.sighBtn.classList.add('is-long');
+      if (navigator.vibrate) navigator.vibrate(25);
+    }, LONG_PRESS_MS);
+  });
+  ui.sighBtn.addEventListener('pointerup', () => {
+    clearTimeout(pressTimer);
+    pressTimer = null;
+    if (!longPressed) return;
+    longPressed = false;
+    ui.sighBtn.classList.remove('is-long');
+    suppressClick = true;
+    setTimeout(() => (suppressClick = false), 500);
+    addSigh({ intensity: 2 });
+  });
+  ui.sighBtn.addEventListener('pointercancel', cancelPress);
+  ui.sighBtn.addEventListener('pointerleave', cancelPress);
+  ui.sighBtn.addEventListener('contextmenu', (e) => e.preventDefault());
+  ui.sighBtn.addEventListener('click', () => {
+    if (suppressClick) {
+      suppressClick = false;
+      return;
+    }
+    addSigh();
+  });
   ui.undoBtn.addEventListener('click', undoLast);
+  ui.reviewOk.addEventListener('click', dismissReview);
+  ui.restoreTrash.addEventListener('click', restoreTrash);
   ui.shareBtn.addEventListener('click', share);
 
   ui.reasons.addEventListener('click', (e) => {
@@ -1302,6 +1457,19 @@ function bindEvents() {
   });
   ui.syncNow.addEventListener('click', () => runSync());
   ui.syncDisconnect.addEventListener('click', disconnectSync);
+  ui.scTest.addEventListener('click', sendShortcutTest);
+  const copyText = async (text, okMsg) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      toast(okMsg);
+    } catch {
+      toast('無法存取剪貼簿，請長按選取');
+    }
+  };
+  ui.copyScUrl.addEventListener('click', () => copyText(ui.scUrl.textContent, '已複製網址'));
+  ui.copyScToken.addEventListener('click', () => {
+    if (state.settings.sync) copyText(state.settings.sync.token, '已複製 token，貼到捷徑的 Authorization 標頭');
+  });
   window.addEventListener('online', () => scheduleSync());
 
   // 快速記錄的確認畫面
@@ -1327,7 +1495,7 @@ function bindEvents() {
     if (!onBody || currentView !== 'record' || !ui.quickOverlay.hidden || !ui.breathOverlay.hidden) return;
     e.preventDefault();
     pressVisual();
-    addSigh();
+    addSigh({ intensity: e.shiftKey ? 2 : 1 });
   });
 
   // 回到前景或跨過午夜時，把「今天」相關的畫面重畫。
@@ -1366,6 +1534,7 @@ function checkDayChange(force) {
   todayStamp = key;
   renderAll();
   updateBadge();
+  maybeShowReview();
   if (changed && !countToday(state.sighs)) ui.quote.textContent = pickIdleLine();
 }
 
@@ -1380,12 +1549,35 @@ function handleQuickAction() {
   ui.quickOverlay.hidden = false;
 }
 
+function offerUpdate() {
+  if (updateOffered) return;
+  updateOffered = true;
+  toast('新版本已就緒', { ms: 15000, actions: [{ label: '更新', onClick: () => location.reload() }] });
+}
+
 function registerServiceWorker() {
   if (!('serviceWorker' in navigator)) return;
   const secure = location.protocol === 'https:' || ['localhost', '127.0.0.1'].includes(location.hostname);
   if (!secure) return;
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('./sw.js').catch(() => {});
+  window.addEventListener('load', async () => {
+    try {
+      const reg = await navigator.serviceWorker.register('./sw.js');
+      const watch = (worker) => {
+        if (!worker) return;
+        worker.addEventListener('statechange', () => {
+          if (worker.state === 'installed' && navigator.serviceWorker.controller) offerUpdate();
+        });
+      };
+      if (reg.waiting && navigator.serviceWorker.controller) offerUpdate();
+      watch(reg.installing);
+      reg.addEventListener('updatefound', () => watch(reg.installing));
+      // 回到前景時順便看看有沒有新版
+      document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) reg.update().catch(() => {});
+      });
+    } catch {
+      /* 註冊失敗就當作沒有離線功能 */
+    }
   });
 }
 
@@ -1397,6 +1589,7 @@ function init() {
   renderAll();
   ui.quote.textContent = countToday(state.sighs) ? pickQuote() : pickIdleLine();
   bindEvents();
+  maybeShowReview();
   showView(location.hash.slice(1) || 'record');
   handleQuickAction();
   updateBadge();
