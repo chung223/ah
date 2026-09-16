@@ -1,0 +1,476 @@
+<!doctype html>
+<html lang="zh-Hant-TW" data-build="23b9a58">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>唉 · 嘆氣計數器</title>
+  <meta name="description" content="一個安靜的嘆氣計數器：記下每一聲「唉」，看看自己什麼時候、為了什麼而嘆氣。資料只存在你的裝置裡。" />
+  <meta name="color-scheme" content="dark light" />
+  <meta name="theme-color" content="#0d1120" media="(prefers-color-scheme: dark)" />
+  <meta name="theme-color" content="#f4eee3" media="(prefers-color-scheme: light)" />
+  <link rel="manifest" href="./manifest.webmanifest" />
+  <link rel="icon" href="./icons/icon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="唉" />
+  <meta property="og:title" content="唉 · 嘆氣計數器" />
+  <meta property="og:description" content="記下每一聲「唉」。資料只存在你的裝置裡。" />
+  <script>
+    // 在樣式載入前先套用使用者選的主題，避免閃一下。
+    try {
+      var s = JSON.parse(localStorage.getItem('ah.sigh.v1') || 'null');
+      var t = s && s.settings && s.settings.theme;
+      if (t === 'dark' || t === 'light') document.documentElement.dataset.theme = t;
+    } catch (e) {}
+  </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght,SOFT,WONK@9..144,300..700,0..100,0..1&family=Noto+Serif+TC:wght@400;600&family=Noto+Sans+TC:wght@400;500;700&display=swap" />
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <div class="atmosphere" aria-hidden="true">
+    <i class="glow glow-a"></i>
+    <i class="glow glow-b"></i>
+    <i class="grain"></i>
+  </div>
+
+  <header class="top">
+    <a class="brand" href="./">
+      <span class="brand-mark">唉。</span>
+      <span class="brand-sub">嘆氣計數器</span>
+    </a>
+    <nav class="tabs" role="tablist" aria-label="頁面">
+      <button type="button" role="tab" id="tab-record" data-view="record" aria-selected="true" aria-controls="view-record">記錄</button>
+      <button type="button" role="tab" id="tab-stats" data-view="stats" aria-selected="false" aria-controls="view-stats" tabindex="-1">統計</button>
+      <button type="button" role="tab" id="tab-settings" data-view="settings" aria-selected="false" aria-controls="view-settings" tabindex="-1">設定</button>
+    </nav>
+    <button type="button" class="icon-btn" id="theme-toggle" aria-label="切換主題">
+      <svg class="icon-moon" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
+      <svg class="icon-sun" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><circle cx="12" cy="12" r="4.2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+    </button>
+  </header>
+
+  <main class="page">
+    <!-- 記錄 -->
+    <section id="view-record" class="view" role="tabpanel" aria-labelledby="tab-record">
+      <article class="card review-card" id="review-card" hidden>
+        <h3>昨天的你</h3>
+        <p class="review-main" id="review-main"></p>
+        <ul class="review-notes" id="review-notes"></ul>
+        <button type="button" class="btn btn-sm" id="review-ok">知道了</button>
+      </article>
+      <div class="hero">
+        <div class="hero-count reveal" style="--i:0">
+          <span class="vertical-label" aria-hidden="true">今日嘆氣</span>
+          <p class="today-date" id="today-date"></p>
+          <p class="count-wrap">
+            <span class="sr-only">今天嘆氣次數</span>
+            <span class="count" id="today-count" aria-live="polite">0</span>
+            <span class="unit">次</span>
+          </p>
+          <p class="quote" id="quote"></p>
+        </div>
+
+        <div class="hero-action reveal" style="--i:1">
+          <div class="sigh-stage" id="sigh-stage">
+            <i class="halo" aria-hidden="true"></i>
+            <button type="button" class="sigh-btn" id="sigh-btn" aria-label="記錄一次嘆氣">
+              <span class="sigh-glyph" aria-hidden="true">唉</span>
+              <span class="sigh-reason" id="sigh-btn-reason">沒為什麼</span>
+            </button>
+            <div class="float-layer" id="float-layer" aria-hidden="true"></div>
+          </div>
+          <div class="under-btn">
+            <button type="button" class="link-btn" id="undo-btn" disabled>撤銷上一次</button>
+            <span class="hint">長按＝長嘆 · 或按 <kbd>空白鍵</kbd></span>
+          </div>
+          <div class="breath-prompt" id="breath-prompt" hidden>
+            <p id="breath-prompt-text"></p>
+            <div class="btn-row">
+              <button type="button" class="btn btn-sm" id="breath-yes">好，呼吸一分鐘</button>
+              <button type="button" class="link-btn" id="breath-no">先不要</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="reasons-block reveal" style="--i:2">
+        <p class="reasons-title">這口氣，是為了…</p>
+        <div class="reasons" id="reasons" role="group" aria-label="嘆氣原因"></div>
+      </div>
+
+      <div class="cards">
+        <article class="card reveal" id="card-week" style="--i:3">
+          <h3>這 7 天</h3>
+          <div id="week-chart" class="chart-box"></div>
+          <p class="sub" id="week-total"></p>
+        </article>
+
+        <article class="card reveal" id="card-calm" style="--i:4">
+          <h3>平靜</h3>
+          <div class="calm-row">
+            <div>
+              <div class="sub">距離上一次嘆氣</div>
+              <div class="big-num" id="calm-now">—</div>
+            </div>
+          </div>
+          <dl class="mini-stats">
+            <div><dt>最長平靜</dt><dd id="calm-longest">—</dd></div>
+            <div><dt>連續沒嘆氣</dt><dd id="calm-streak">—</dd></div>
+            <div><dt>累計</dt><dd><span id="total-count">0</span> 次</dd></div>
+          </dl>
+          <button type="button" class="btn btn-sm" id="share-btn">分享今天</button>
+        </article>
+
+        <article class="card reveal" id="card-mic" style="--i:5">
+          <h3>自動偵測 <span class="tag">實驗性</span></h3>
+          <div class="mic-head">
+            <p class="sub">
+              開啟後會用麥克風聽你有沒有嘆氣，聽到就自動記一筆。聲音只在這台裝置上分析，不會上傳。判斷很粗略，會有誤判。
+            </p>
+            <label class="switch" aria-label="開啟自動偵測">
+              <input type="checkbox" id="mic-toggle" />
+              <span class="track"></span>
+            </label>
+          </div>
+          <div id="mic-body" hidden>
+            <div class="meter" aria-hidden="true"><i id="mic-meter-fill"></i></div>
+            <p class="mic-status" id="mic-status" aria-live="polite">聆聽中</p>
+            <label class="range-row">
+              <span>靈敏度</span>
+              <input type="range" id="mic-sens" min="0" max="1" step="0.05" value="0.5" />
+            </label>
+            <p class="sub mic-last" id="mic-last"></p>
+            <div class="mic-cal">
+              <div class="btn-row">
+                <button type="button" class="btn btn-sm" id="mic-cal">用我的聲音校正</button>
+                <button type="button" class="link-btn" id="mic-cal-reset" hidden>重設校正</button>
+              </div>
+              <p class="sub" id="mic-cal-status" aria-live="polite"></p>
+            </div>
+          </div>
+        </article>
+
+        <article class="card reveal" id="card-recent" style="--i:6">
+          <h3>最近</h3>
+          <p class="sub" id="recent-empty">還沒有紀錄。</p>
+          <ul class="recent-list" id="recent-list"></ul>
+        </article>
+      </div>
+    </section>
+
+    <!-- 統計 -->
+    <section id="view-stats" class="view" role="tabpanel" aria-labelledby="tab-stats" hidden>
+      <div class="view-head">
+        <h2>統計</h2>
+        <div class="seg" id="range-seg" role="group" aria-label="範圍">
+          <button type="button" data-range="7" aria-pressed="true">7 天</button>
+          <button type="button" data-range="30" aria-pressed="false">30 天</button>
+        </div>
+      </div>
+      <div class="stats-grid">
+        <article class="card card-days">
+          <h3>每天</h3>
+          <div id="day-chart" class="chart-box"></div>
+          <p class="sub" id="day-summary"></p>
+        </article>
+        <article class="card card-hours">
+          <h3>一天之中</h3>
+          <div id="hour-chart" class="chart-box"></div>
+          <p class="sub" id="hour-summary"></p>
+        </article>
+        <article class="card card-year">
+          <h3>這一年</h3>
+          <div class="heat-scroll" id="year-heat"></div>
+          <div class="heat-foot">
+            <p class="sub" id="year-summary"></p>
+            <span class="heat-legend" aria-hidden="true">少 <i class="l0"></i><i class="l1"></i><i class="l2"></i><i class="l3"></i><i class="l4"></i> 多</span>
+          </div>
+        </article>
+        <article class="card card-grid">
+          <h3>星期 × 時段</h3>
+          <div class="wp-grid" id="week-period"></div>
+          <p class="sub" id="week-period-summary"></p>
+        </article>
+        <article class="card card-reasons">
+          <h3>為了什麼</h3>
+          <ul class="reason-list" id="reason-list"></ul>
+        </article>
+        <article class="card card-records">
+          <h3>紀錄</h3>
+          <div class="tiles" id="records"></div>
+        </article>
+        <article class="card card-insights">
+          <h3>觀察</h3>
+          <ul class="insight-list" id="insight-list"></ul>
+        </article>
+        <article class="card card-report">
+          <div class="report-head">
+            <h3>報告</h3>
+            <div class="seg" id="report-kind" role="group" aria-label="報告種類">
+              <button type="button" data-kind="week" aria-pressed="true">週報</button>
+              <button type="button" data-kind="month" aria-pressed="false">月報</button>
+              <button type="button" data-kind="year" aria-pressed="false">年度</button>
+            </div>
+          </div>
+          <p class="sub">做成一張圖，存下來或傳給朋友。</p>
+          <div class="report-nav" id="report-nav" hidden>
+            <button type="button" class="icon-mini" id="report-prev" aria-label="上一個">‹</button>
+            <span id="report-label"></span>
+            <button type="button" class="icon-mini" id="report-next" aria-label="下一個">›</button>
+          </div>
+          <div class="btn-row report-actions">
+            <button type="button" class="btn" id="report-make">產生週報</button>
+            <span class="sub" id="report-status"></span>
+          </div>
+          <div id="report-preview" hidden>
+            <img id="report-img" alt="嘆氣週報" />
+            <div class="btn-row">
+              <button type="button" class="btn btn-sm" id="report-share" hidden>分享</button>
+              <button type="button" class="btn btn-sm" id="report-save">儲存圖片</button>
+            </div>
+          </div>
+        </article>
+        <article class="card card-notes">
+          <h3>筆記</h3>
+          <input type="search" class="text-input" id="note-search" placeholder="搜尋筆記" aria-label="搜尋筆記" />
+          <p class="sub" id="note-empty"></p>
+          <ul class="note-list" id="note-list"></ul>
+        </article>
+      </div>
+    </section>
+
+    <!-- 設定 -->
+    <section id="view-settings" class="view" role="tabpanel" aria-labelledby="tab-settings" hidden>
+      <div class="view-head">
+        <h2>設定</h2>
+      </div>
+      <div class="card settings-card">
+        <div class="setting">
+          <div class="setting-text">
+            <strong>主題</strong>
+            <span>「自動」會跟著系統的深淺色。</span>
+          </div>
+          <div class="seg" id="theme-seg" role="group" aria-label="主題">
+            <button type="button" data-theme-choice="auto" aria-pressed="true">自動</button>
+            <button type="button" data-theme-choice="dark" aria-pressed="false">深色</button>
+            <button type="button" data-theme-choice="light" aria-pressed="false">淺色</button>
+          </div>
+        </div>
+        <div class="setting">
+          <div class="setting-text">
+            <strong>音效</strong>
+            <span>每次記錄時，播一聲輕輕的吐氣。</span>
+          </div>
+          <label class="switch" aria-label="開啟音效">
+            <input type="checkbox" id="sound-toggle" />
+            <span class="track"></span>
+          </label>
+        </div>
+        <div class="setting">
+          <div class="setting-text">
+            <strong>App 圖示顯示今日次數</strong>
+            <span>加到主畫面後，圖示右上角會顯示今天嘆了幾次。<em id="badge-note" hidden>這個瀏覽器不支援。</em></span>
+          </div>
+          <label class="switch" aria-label="圖示顯示今日次數">
+            <input type="checkbox" id="badge-toggle" />
+            <span class="track"></span>
+          </label>
+        </div>
+        <div class="setting">
+          <div class="setting-text">
+            <strong>匯出</strong>
+            <span>把全部紀錄存成檔案，換裝置或做備份用。</span>
+          </div>
+          <div class="btn-row">
+            <button type="button" class="btn" id="export-json">JSON</button>
+            <button type="button" class="btn" id="export-csv">CSV</button>
+          </div>
+        </div>
+        <div class="setting">
+          <div class="setting-text">
+            <strong>匯入</strong>
+            <span>讀取之前匯出的 JSON，和現有紀錄合併，同一時間的不會重複。</span>
+          </div>
+          <label class="btn file-btn">
+            選擇檔案
+            <input type="file" id="import-file" accept="application/json,.json" />
+          </label>
+        </div>
+        <div class="setting">
+          <div class="setting-text">
+            <strong>清除</strong>
+            <span>刪掉這台裝置上的所有紀錄。24 小時內可以復原，之後就真的沒了。</span>
+            <span id="restore-hint" hidden></span>
+          </div>
+          <div class="btn-row">
+            <button type="button" class="btn" id="restore-trash" hidden>復原上次清除</button>
+            <button type="button" class="btn danger" id="clear-all">清除全部</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="card settings-card">
+        <h3>原因標籤</h3>
+        <div class="setting">
+          <div class="setting-text">
+            <span>用箭頭調整順序；自訂的標籤可以改名或刪除。</span>
+          </div>
+        </div>
+        <ul class="rm-list" id="reason-manage"></ul>
+        <div class="rm-add">
+          <input type="text" class="text-input" id="reason-new" maxlength="12" placeholder="新標籤，例如：房東" aria-label="新標籤名稱" />
+          <button type="button" class="btn" id="reason-add">新增</button>
+        </div>
+      </div>
+
+      <div class="card settings-card">
+        <h3>照時段自動選原因</h3>
+        <div class="setting">
+          <div class="setting-text">
+            <strong>開啟後，原因會跟著時段自動切換</strong>
+            <span>例如上班時間預設「工作」、深夜預設「沒為什麼」。你臨時手動改的會維持到下一個時段。</span>
+          </div>
+          <label class="switch" aria-label="照時段自動選原因">
+            <input type="checkbox" id="period-toggle" />
+            <span class="track"></span>
+          </label>
+        </div>
+        <div id="period-list" class="period-list" hidden></div>
+      </div>
+
+      <div class="card settings-card">
+        <h3>手機上更快的記錄方式</h3>
+        <div class="setting">
+          <div class="setting-text">
+            <strong>加到主畫面</strong>
+            <span>iPhone：用 Safari 打開，分享 → 加入主畫面。Android：Chrome 選單 → 加到主畫面或安裝。之後打開就是一顆大按鈕，按一下就記好了。</span>
+          </div>
+        </div>
+        <div class="setting">
+          <div class="setting-text">
+            <strong>快速記錄網址</strong>
+            <span>打開這個網址就會直接記一筆，不用再按。可以做成 iPhone 捷徑（綁 Siri、輕點背面或動作按鈕），或 Android 的桌面捷徑；Android 長按 App 圖示也有「記一次嘆氣」。</span>
+            <code class="quick-url" id="quick-url"></code>
+          </div>
+          <button type="button" class="btn" id="copy-quick">複製網址</button>
+        </div>
+        <div class="setting">
+          <div class="setting-text">
+            <strong>iPhone 請注意</strong>
+            <span>主畫面 App 和 Safari 的紀錄是分開存的。想用捷徑記錄，就把統計也放在 Safari 裡看（用書籤就好，不要加到主畫面）；想用主畫面 App，就在 App 裡按按鈕。Android 兩邊共用，沒有這個問題。開了下面的「跨裝置同步」，兩邊也會自動合成同一份。</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="card settings-card">
+        <h3>跨裝置同步</h3>
+        <div id="sync-setup">
+          <div class="setting">
+            <div class="setting-text">
+              <strong>用你自己的 GitHub 私密 Gist 當雲端</strong>
+              <span>
+                不經過任何第三方伺服器：這個 App 直接把紀錄存到你帳號下的一個私密 Gist，手機和電腦就能共用同一份。
+                需要一個只有 Gist 權限的 token：到
+                <a href="https://github.com/settings/personal-access-tokens/new" rel="noopener" target="_blank">GitHub → Fine-grained tokens</a>，
+                Account permissions 裡把 Gists 設成 Read and write，建立後貼到下面。token 只會存在這台裝置。
+              </span>
+            </div>
+          </div>
+          <div class="rm-add">
+            <input type="password" class="text-input" id="sync-token" placeholder="github_pat_…" autocomplete="off" aria-label="GitHub token" />
+            <button type="button" class="btn" id="sync-connect">連線</button>
+          </div>
+        </div>
+        <div id="sync-connected" hidden>
+          <div class="setting">
+            <div class="setting-text">
+              <strong>已連線</strong>
+              <span id="sync-status"></span>
+              <span id="sync-diag" class="sync-diag"></span>
+              <a id="sync-gist-link" href="#" rel="noopener" target="_blank" hidden>在 GitHub 上打開這個 Gist</a>
+            </div>
+            <div class="btn-row">
+              <button type="button" class="btn btn-sm" id="sync-now">立即同步</button>
+              <button type="button" class="btn btn-sm danger" id="sync-disconnect">移除 token</button>
+            </div>
+          </div>
+          <details class="sc-help" id="shortcut-help">
+            <summary>iPhone 捷徑：不開瀏覽器就記錄</summary>
+            <p class="sub">捷徑會在你的 Gist 留一則留言，App 下次打開（或同步）時把留言變成一筆紀錄。做一次就好，之後綁到「輕點背面」或 Siri。</p>
+            <ol class="sc-steps">
+              <li>捷徑 App → 新增捷徑 → 加入「取得 URL 內容」。</li>
+              <li>
+                URL 貼上：
+                <code class="quick-url" id="sc-url"></code>
+                <button type="button" class="btn btn-sm" id="copy-sc-url">複製網址</button>
+              </li>
+              <li>
+                方法選 <strong>POST</strong>。標頭加兩個：<code>Authorization</code> 的值是 <code>Bearer 你的token</code>（中間一個空格）、<code>Accept</code> 的值是 <code>application/vnd.github+json</code>。
+                <button type="button" class="btn btn-sm" id="copy-sc-token">複製 token</button>
+              </li>
+              <li>要求本文選 <strong>JSON</strong>，加一個欄位 <code>body</code>，值填 <code>唉</code>。想帶原因就寫「唉 工作」，後面再接一句話會變成筆記。</li>
+              <li>設定 → 輔助使用 → 觸控 → 輕點背面，選這個捷徑。或直接對 Siri 說捷徑的名字。</li>
+            </ol>
+            <div class="btn-row report-actions">
+              <button type="button" class="btn btn-sm" id="sc-test" disabled>送一筆測試</button>
+              <button type="button" class="btn btn-sm" id="inbox-check" disabled>檢查收件匣</button>
+              <span class="sub" id="sc-status"></span>
+            </div>
+            <ul class="inbox-list" id="inbox-list" hidden></ul>
+          </details>
+        </div>
+      </div>
+
+      <div class="about">
+        <p>
+          「唉」是一個很小的網頁程式。所有紀錄都存在你這台裝置的瀏覽器裡，沒有帳號、沒有伺服器、沒有追蹤。
+          可以加到手機主畫面當作 App 用，離線也能開。
+        </p>
+        <p>
+          原始碼在 <a href="https://github.com/chung223/ah" rel="noopener">GitHub</a>。
+        </p>
+      </div>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <span>資料只存在這台裝置。</span>
+    <a href="https://github.com/chung223/ah" rel="noopener">GitHub</a>
+    <span class="build" id="build-stamp"></span>
+  </footer>
+
+  <!-- 快速記錄的確認畫面 -->
+  <div class="overlay" id="quick-overlay" hidden>
+    <div class="quick-card">
+      <p class="quick-title">記錄了</p>
+      <p class="quick-count-wrap"><span class="sub">今天第</span> <span class="quick-count" id="quick-count">1</span> <span class="sub">次</span></p>
+      <div class="btn-row">
+        <button type="button" class="btn" id="quick-undo">撤銷</button>
+        <button type="button" class="btn" id="quick-close">關閉</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 深呼吸 -->
+  <div class="overlay" id="breath-overlay" hidden role="dialog" aria-label="深呼吸引導">
+    <div class="breath-stage">
+      <div class="breath-circle" id="breath-circle" aria-hidden="true"></div>
+      <p class="breath-phase" id="breath-phase" aria-live="polite">準備</p>
+      <p class="sub" id="breath-cycle"></p>
+      <button type="button" class="btn btn-sm" id="breath-stop">結束</button>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" role="status" aria-live="polite">
+    <span id="toast-text"></span>
+    <span class="toast-actions" id="toast-actions"></span>
+  </div>
+  <noscript><p class="noscript">這個計數器需要 JavaScript 才能運作。</p></noscript>
+
+  <script type="module" src="./src/app.js"></script>
+</body>
+</html>
