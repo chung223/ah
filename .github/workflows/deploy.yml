@@ -39,7 +39,9 @@ jobs:
           short="${GITHUB_SHA::7}"
           sed -i "s/^const VERSION = '[^']*';/const VERSION = '${short}';/" _site/sw.js
           grep -q "^const VERSION = '${short}';" _site/sw.js
-          echo "sw.js VERSION = ${short}"
+          sed -i "s/data-build=\"dev\"/data-build=\"${short}\"/" _site/index.html
+          grep -q "data-build=\"${short}\"" _site/index.html
+          echo "version = ${short}"
       - name: 推到 gh-pages 分支
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

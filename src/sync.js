@@ -232,13 +232,18 @@ export async function syncOnce(state, client, now = Date.now(), opts = {}) {
     remoteText = await client.readGist(gistId);
   }
 
-  // 收件匣：捷徑留在 Gist 上的留言，先併進本機
+  // 收件匣：捷徑留在 Gist 上的留言，先併進本機。讀不到就記下錯誤，同步其餘部分照常。
   let inbox = [];
+  let inboxError = null;
+  let inboxSeen = 0;
   if (client.listComments) {
     try {
-      inbox = inboxToSighs(await client.listComments(gistId), opts.reasons || [], original.deleted);
-    } catch {
+      const comments = await client.listComments(gistId);
+      inboxSeen = Array.isArray(comments) ? comments.length : 0;
+      inbox = inboxToSighs(comments, opts.reasons || [], original.deleted);
+    } catch (err) {
       inbox = [];
+      inboxError = err && err.message ? err.message : String(err);
     }
   }
   if (inbox.length) {
@@ -278,5 +283,5 @@ export async function syncOnce(state, client, now = Date.now(), opts = {}) {
   sync.lastSync = now;
   sync.force = false;
   const status = localChanged && remoteChanged ? 'both' : localChanged ? 'pulled' : remoteChanged ? 'pushed' : 'unchanged';
-  return { status, gistId, inbox: inbox.length };
+  return { status, gistId, inbox: inbox.length, inboxSeen, inboxError, total: state.sighs.length };
 }
