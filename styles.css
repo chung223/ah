@@ -2170,3 +2170,41 @@ input[type="range"] {
   margin-top: 6px;
   font-size: 13px;
 }
+
+/* 收件匣清單 */
+.inbox-list {
+  list-style: none;
+  margin: 10px 0 4px;
+  padding: 0;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.inbox-list li {
+  padding: 6px 0;
+  border-top: 1px solid var(--line);
+  overflow-wrap: anywhere;
+}
+
+.inbox-body {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12.5px;
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: var(--bg-3);
+}
+
+.inbox-status {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  padding: 1px 7px;
+  border-radius: 6px;
+  border: 1px solid var(--line-strong);
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+
+.inbox-status.is-new {
+  color: var(--amber);
+  border-color: var(--amber-glow);
+}
