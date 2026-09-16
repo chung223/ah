@@ -77,6 +77,8 @@ let reportYear = new Date().getFullYear();
 let reportMonth = new Date().getMonth() + 1;
 let reportYearOnly = new Date().getFullYear();
 let updateOffered = false;
+let lastSyncResult = null;
+const BUILD = document.documentElement.dataset.build || 'dev';
 let pressTimer = null;
 let longPressed = false;
 let suppressClick = false;
@@ -178,6 +180,9 @@ const ui = {
   syncToken: $('#sync-token'),
   syncConnect: $('#sync-connect'),
   syncStatus: $('#sync-status'),
+  syncDiag: $('#sync-diag'),
+  syncGistLink: $('#sync-gist-link'),
+  buildStamp: $('#build-stamp'),
   syncNow: $('#sync-now'),
   syncDisconnect: $('#sync-disconnect'),
   shortcutHelp: $('#shortcut-help'),
@@ -603,11 +608,35 @@ function setSyncStatus(text) {
     : '尚未同步';
 }
 
+function renderSyncDiag() {
+  const cfg = state.settings.sync;
+  const r = lastSyncResult;
+  ui.syncGistLink.hidden = !(cfg && cfg.gistId);
+  if (cfg && cfg.gistId) ui.syncGistLink.href = `https://gist.github.com/${cfg.gistId}`;
+  if (!cfg) {
+    ui.syncDiag.textContent = '';
+    return;
+  }
+  const parts = [`版本 ${BUILD}`];
+  if (r) {
+    if (r.error) parts.push(`上次結果：失敗（${r.error}）`);
+    else {
+      const what = { created: '建立雲端備份', pushed: '上傳', pulled: '下載', both: '雙向合併', unchanged: '已是最新' }[r.status] || r.status;
+      parts.push(`上次結果：${what}，本機共 ${r.total} 筆`);
+      parts.push(r.inboxError ? `收件匣讀取失敗：${r.inboxError}` : `收件匣看到 ${r.inboxSeen} 則留言，收進 ${r.inbox} 筆`);
+    }
+  } else {
+    parts.push('這次打開還沒同步過');
+  }
+  ui.syncDiag.textContent = parts.join(' · ');
+}
+
 function renderSyncCard() {
   const cfg = state.settings.sync;
   ui.syncSetup.hidden = !!cfg;
   ui.syncConnected.hidden = !cfg;
   setSyncStatus();
+  renderSyncDiag();
   ui.scUrl.textContent = cfg && cfg.gistId ? `https://api.github.com/gists/${cfg.gistId}/comments` : '（第一次同步完成後會出現）';
   ui.scTest.disabled = !(cfg && cfg.gistId);
 }
@@ -1098,10 +1127,12 @@ async function runSync({ silent = false } = {}) {
   setSyncStatus('同步中…');
   try {
     const res = await syncOnce(state, createGistClient(cfg.token), Date.now(), { reasons: reasonList() });
+    lastSyncResult = res;
     persist();
     renderAll();
     updateBadge();
     if (res.inbox) toast(`從捷徑收到 ${res.inbox} 筆`);
+    else if (res.inboxError) toast(`同步好了，但讀不到留言：${res.inboxError}`, { ms: 5000 });
     else if (!silent) {
       toast(
         {
@@ -1120,7 +1151,9 @@ async function runSync({ silent = false } = {}) {
       renderSyncCard();
       toast('token 無效或沒有 Gist 權限，請重新設定', { ms: 4000 });
     } else {
+      lastSyncResult = { error: err && err.message ? err.message : '未知錯誤' };
       setSyncStatus(`上次同步失敗：${err && err.message ? err.message : '未知錯誤'}`);
+      renderSyncDiag();
       if (!silent) toast(`同步失敗：${err && err.message ? err.message : '未知錯誤'}`);
     }
   } finally {
@@ -1631,10 +1664,28 @@ function offerUpdate() {
   toast('新版本已就緒', { ms: 15000, actions: [{ label: '更新', onClick: () => location.reload() }] });
 }
 
+function safeToReload() {
+  const a = document.activeElement;
+  const typing = a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA' || a.tagName === 'SELECT');
+  return !typing && ui.breathOverlay.hidden && ui.quickOverlay.hidden && !listener && !syncing;
+}
+
 function registerServiceWorker() {
   if (!('serviceWorker' in navigator)) return;
   const secure = location.protocol === 'https:' || ['localhost', '127.0.0.1'].includes(location.hostname);
   if (!secure) return;
+  const hadController = !!navigator.serviceWorker.controller;
+  let reloading = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    // 第一次安裝也會觸發，那時不用重載；之後換新版就直接套用，正在打字或做事就改用提示。
+    if (!hadController || reloading) return;
+    if (safeToReload()) {
+      reloading = true;
+      location.reload();
+    } else {
+      offerUpdate();
+    }
+  });
   window.addEventListener('load', async () => {
     try {
       const reg = await navigator.serviceWorker.register('./sw.js');
@@ -1660,6 +1711,7 @@ function registerServiceWorker() {
 /* ---------- 啟動 ---------- */
 
 function init() {
+  ui.buildStamp.textContent = `版本 ${BUILD}`;
   applyTheme();
   applyPeriodReason(true);
   renderAll();

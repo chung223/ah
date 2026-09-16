@@ -226,3 +226,32 @@ test('syncOnce：force 會整份覆蓋雲端（復原清除用）', async () => 
   assert.deepEqual(remote.deleted, []);
   assert.equal(state.settings.sync.force, false, '用過就關掉');
 });
+
+test('syncOnce：留言讀取失敗時同步照常完成，並回報 inboxError', async () => {
+  const content = JSON.stringify({ sighs: [{ t: 1, r: null }], deleted: [], customReasons: [], reasonOrder: null });
+  const client = fakeClient({ id: 'gist123', content });
+  client.listComments = async () => {
+    throw new SyncError('auth', 'token 無效或權限不足');
+  };
+  const state = stateWith([{ t: 1, r: null }, { t: 2, r: 'work' }], { sync: { token: 't', gistId: 'gist123', lastSync: 0 } });
+  const res = await syncOnce(state, client, 9);
+  assert.equal(res.status, 'pushed');
+  assert.equal(res.inbox, 0);
+  assert.equal(res.inboxSeen, 0);
+  assert.equal(res.inboxError, 'token 無效或權限不足');
+  assert.equal(res.total, 2);
+  assert.equal(JSON.parse(client.store.gist.content).sighs.length, 2);
+});
+
+test('syncOnce：回報看到幾則留言', async () => {
+  const content = JSON.stringify({ sighs: [], deleted: [], customReasons: [], reasonOrder: null });
+  const client = fakeClient({ id: 'gist123', content }, [
+    { id: 1, body: '唉', created_at: '2026-09-15T01:02:03Z' },
+    { id: 2, body: '', created_at: 'garbage' },
+  ]);
+  const state = stateWith([], { sync: { token: 't', gistId: 'gist123', lastSync: 0 } });
+  const res = await syncOnce(state, client, 9);
+  assert.equal(res.inboxSeen, 2);
+  assert.equal(res.inbox, 1);
+  assert.equal(res.inboxError, null);
+});

@@ -2151,3 +2151,22 @@ input[type="range"] {
   line-height: 1;
   padding: 3px 11px;
 }
+
+/* 版本與同步診斷 */
+.foot .build {
+  opacity: 0.7;
+}
+
+.sync-diag {
+  display: block;
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--ink-3);
+}
+
+#sync-gist-link {
+  display: inline-block;
+  margin-top: 6px;
+  font-size: 13px;
+}

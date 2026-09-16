@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-Hant-TW">
+<html lang="zh-Hant-TW" data-build="dev">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
@@ -390,6 +390,8 @@
             <div class="setting-text">
               <strong>已連線</strong>
               <span id="sync-status"></span>
+              <span id="sync-diag" class="sync-diag"></span>
+              <a id="sync-gist-link" href="#" rel="noopener" target="_blank" hidden>在 GitHub 上打開這個 Gist</a>
             </div>
             <div class="btn-row">
               <button type="button" class="btn btn-sm" id="sync-now">立即同步</button>
@@ -436,6 +438,7 @@
   <footer class="foot">
     <span>資料只存在這台裝置。</span>
     <a href="https://github.com/chung223/ah" rel="noopener">GitHub</a>
+    <span class="build" id="build-stamp"></span>
   </footer>
 
   <!-- 快速記錄的確認畫面 -->
