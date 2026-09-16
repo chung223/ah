@@ -149,7 +149,7 @@ test('自訂標籤、時段、校正、同步設定的正規化', () => {
   assert.equal(st.settings.reasonMode, 'period');
   assert.deepEqual(st.settings.periodReasons, { morning: 'work', noon: null, afternoon: null, evening: null, night: 'c_abcd12' });
   assert.deepEqual(st.settings.micProfile, { minFlat: 0.1, riseDb: 8, minDur: 300, maxDur: 4500 });
-  assert.deepEqual(st.settings.sync, { token: 'tok', gistId: 'abc', lastSync: 123, force: false });
+  assert.deepEqual(st.settings.sync, { token: 'tok', gistId: 'abc', lastSync: 123, force: false, processed: [] });
   assert.equal(st.sighs[0].r, 'c_abcd12', '紀錄上的自訂代號保留');
 
   const bad = normalizeState({ settings: { micProfile: { minFlat: 'x' }, sync: { token: '' } } });

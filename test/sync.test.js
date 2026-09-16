@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mergeData, parseRemote, syncOnce, createGistClient, GIST_FILE, SyncError, parseInboxComment, inboxToSighs } from '../src/sync.js';
+import { mergeData, parseRemote, syncOnce, createGistClient, GIST_FILE, SyncError, parseInboxComment, inboxToSighs, inspectInbox } from '../src/sync.js';
 
 test('mergeData：聯集、墓碑、筆記保留、標籤合併', () => {
   const local = {
@@ -254,4 +254,40 @@ test('syncOnce：回報看到幾則留言', async () => {
   assert.equal(res.inboxSeen, 2);
   assert.equal(res.inbox, 1);
   assert.equal(res.inboxError, null);
+});
+
+test('刪不掉的留言會記住 id，下次不再收；inspectInbox 標出狀態', async () => {
+  const content = JSON.stringify({ sighs: [], deleted: [], customReasons: [], reasonOrder: null });
+  const client = fakeClient({ id: 'gist123', content }, [{ id: 77, body: '唉 工作', created_at: '2026-09-15T01:02:03Z' }]);
+  client.deleteComment = async () => {
+    throw new SyncError('http', 'GitHub 回應 403');
+  };
+  const state = stateWith([], { sync: { token: 't', gistId: 'gist123', lastSync: 0, processed: [] } });
+  const res1 = await syncOnce(state, client, 9, { reasons: REASONS });
+  assert.equal(res1.inbox, 1);
+  assert.equal(res1.deleteError, 'GitHub 回應 403');
+  assert.deepEqual(state.settings.sync.processed, [77]);
+  assert.equal(state.sighs.length, 1);
+
+  const res2 = await syncOnce(state, client, 10, { reasons: REASONS });
+  assert.equal(res2.inbox, 0, '同一則留言不會再收');
+  assert.equal(res2.inboxSeen, 1);
+  assert.equal(state.sighs.length, 1);
+
+  const items = await inspectInbox(state, client, REASONS);
+  assert.equal(items.length, 1);
+  assert.equal(items[0].status, 'done');
+  assert.equal(items[0].parsed.r, 'work');
+
+  // 使用者把那筆刪掉（墓碑）→ 狀態變成 deleted
+  state.deleted = [state.sighs[0].t];
+  state.sighs = [];
+  assert.equal((await inspectInbox(state, client, REASONS))[0].status, 'deleted');
+
+  // 全新的留言 → new
+  client.store.comments.push({ id: 78, body: '唉', created_at: '2026-09-15T02:00:00Z' });
+  const items2 = await inspectInbox(state, client, REASONS);
+  assert.equal(items2.find((c) => c.id === 78).status, 'new');
+  assert.equal(items2.find((c) => c.id === 79 || c.id === 'x'), undefined);
+  assert.equal((await inspectInbox(state, client, REASONS)).some((c) => c.status === 'bad-time'), false);
 });

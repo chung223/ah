@@ -40,7 +40,7 @@ import {
   moveReason,
 } from './reasons.js';
 import { shouldSuggestBreathing, recentCount, createBreathSession } from './breath.js';
-import { createGistClient, syncOnce } from './sync.js';
+import { createGistClient, syncOnce, inspectInbox } from './sync.js';
 import { drawReport, drawMonthReport, drawYearReport, reportFilename } from './report.js';
 
 const FLOAT_WORDS = ['唉', '唉～', '呼…', '哎', '嗯…', '唉。'];
@@ -191,6 +191,8 @@ const ui = {
   copyScToken: $('#copy-sc-token'),
   scTest: $('#sc-test'),
   scStatus: $('#sc-status'),
+  inboxCheck: $('#inbox-check'),
+  inboxList: $('#inbox-list'),
 
   quickOverlay: $('#quick-overlay'),
   quickCount: $('#quick-count'),
@@ -624,6 +626,7 @@ function renderSyncDiag() {
       const what = { created: '建立雲端備份', pushed: '上傳', pulled: '下載', both: '雙向合併', unchanged: '已是最新' }[r.status] || r.status;
       parts.push(`上次結果：${what}，本機共 ${r.total} 筆`);
       parts.push(r.inboxError ? `收件匣讀取失敗：${r.inboxError}` : `收件匣看到 ${r.inboxSeen} 則留言，收進 ${r.inbox} 筆`);
+      if (r.deleteError) parts.push(`留言刪不掉（${r.deleteError}），已記住不會重複收`);
     }
   } else {
     parts.push('這次打開還沒同步過');
@@ -639,6 +642,7 @@ function renderSyncCard() {
   renderSyncDiag();
   ui.scUrl.textContent = cfg && cfg.gistId ? `https://api.github.com/gists/${cfg.gistId}/comments` : '（第一次同步完成後會出現）';
   ui.scTest.disabled = !(cfg && cfg.gistId);
+  ui.inboxCheck.disabled = !(cfg && cfg.gistId);
 }
 
 function renderTrash() {
@@ -1174,6 +1178,40 @@ async function connectSync() {
   if (state.settings.sync) ui.syncToken.value = '';
 }
 
+const INBOX_STATUS = {
+  new: '新的，下次同步會收',
+  done: '已收過',
+  deleted: '對應的紀錄已被你刪除，不再收',
+  'bad-time': '時間格式看不懂，略過',
+};
+
+async function checkInbox() {
+  const cfg = state.settings.sync;
+  if (!cfg || !cfg.gistId) return;
+  ui.inboxCheck.disabled = true;
+  ui.scStatus.textContent = '讀取中…';
+  try {
+    const items = await inspectInbox(state, createGistClient(cfg.token), reasonList());
+    ui.inboxList.hidden = false;
+    if (!items.length) {
+      ui.inboxList.innerHTML = `<li class="muted">API 回傳 0 則留言（Gist ${esc(cfg.gistId.slice(0, 8))}…）。如果網頁上看得到留言，代表捷徑寫到的是另一個 Gist。</li>`;
+    } else {
+      ui.inboxList.innerHTML = items
+        .map(
+          (c) =>
+            `<li><span class="note-when">${c.t ? fullTime(c.t) : '—'}</span> <span class="inbox-body">${esc(c.body || '（空白）')}</span> → ${esc(labelOf(c.parsed.r))}${c.parsed.n ? `，筆記「${esc(c.parsed.n)}」` : ''} <span class="inbox-status is-${esc(c.status)}">${INBOX_STATUS[c.status] || c.status}</span></li>`,
+        )
+        .join('');
+    }
+    ui.scStatus.textContent = `API 回傳 ${items.length} 則留言。`;
+  } catch (err) {
+    ui.inboxList.hidden = true;
+    ui.scStatus.textContent = `讀取留言失敗：${err && err.message ? err.message : '未知錯誤'}`;
+  } finally {
+    ui.inboxCheck.disabled = !(state.settings.sync && state.settings.sync.gistId);
+  }
+}
+
 async function sendShortcutTest() {
   const cfg = state.settings.sync;
   if (!cfg || !cfg.gistId) return;
@@ -1567,6 +1605,7 @@ function bindEvents() {
   ui.syncNow.addEventListener('click', () => runSync());
   ui.syncDisconnect.addEventListener('click', disconnectSync);
   ui.scTest.addEventListener('click', sendShortcutTest);
+  ui.inboxCheck.addEventListener('click', checkInbox);
   const copyText = async (text, okMsg) => {
     try {
       await navigator.clipboard.writeText(text);

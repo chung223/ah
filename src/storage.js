@@ -89,11 +89,15 @@ function normalizeSync(s) {
   if (!s || typeof s !== 'object') return null;
   const token = typeof s.token === 'string' ? s.token.trim() : '';
   if (!token) return null;
+  const processed = Array.isArray(s.processed)
+    ? [...new Set(s.processed.map(Number).filter((n) => Number.isFinite(n)))].slice(-200)
+    : [];
   return {
     token,
     gistId: typeof s.gistId === 'string' ? s.gistId.trim() : '',
     lastSync: clamp(s.lastSync, 0, Number.MAX_SAFE_INTEGER, 0),
     force: s.force === true,
+    processed,
   };
 }
 

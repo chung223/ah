@@ -37,21 +37,50 @@ export function parseInboxComment(body, reasons = []) {
   return { r, n: tokens.join(' ').slice(0, 200) };
 }
 
-/** 把 Gist 留言轉成紀錄。時間用留言建立時間，再用留言 id 錯開毫秒避免同秒撞號。 */
-export function inboxToSighs(comments, reasons = [], deleted = []) {
+/** 留言對應的紀錄時間：留言建立時間，再用留言 id 錯開毫秒避免同秒撞號。 */
+export function commentTime(c) {
+  const base = Date.parse(c && c.created_at);
+  if (!Number.isFinite(base)) return null;
+  return base + (Math.abs(Number(c.id) || 0) % 997);
+}
+
+/**
+ * 把 Gist 留言轉成紀錄。
+ * deleted：墓碑（被刪掉的紀錄）；processed：已經處理過但沒能刪掉的留言 id。兩者都跳過。
+ */
+export function inboxToSighs(comments, reasons = [], deleted = [], processed = []) {
   const dead = new Set(deleted);
+  const done = new Set(processed);
   const out = [];
   for (const c of comments || []) {
-    const base = Date.parse(c && c.created_at);
-    if (!Number.isFinite(base)) continue;
-    const t = base + (Math.abs(Number(c.id) || 0) % 997);
-    if (dead.has(t)) continue;
+    const t = commentTime(c);
+    if (t == null) continue;
+    if (dead.has(t) || done.has(c.id)) continue;
     const { r, n } = parseInboxComment(c.body, reasons);
     const sigh = { t, r, s: 1 };
     if (n) sigh.n = n;
     out.push({ id: c.id, sigh });
   }
   return out;
+}
+
+/** 診斷用：列出收件匣裡每一則留言、解讀結果與目前狀態。 */
+export async function inspectInbox(state, client, reasons = []) {
+  const sync = state.settings.sync;
+  if (!sync || !sync.gistId) throw new SyncError('noauth', '還沒同步過，沒有 Gist');
+  const comments = await client.listComments(sync.gistId);
+  const have = new Set(state.sighs.map((s) => s.t));
+  const dead = new Set(state.deleted || []);
+  const done = new Set(sync.processed || []);
+  return (comments || []).map((c) => {
+    const t = commentTime(c);
+    const parsed = parseInboxComment(c.body, reasons);
+    let status = 'new';
+    if (t == null) status = 'bad-time';
+    else if (dead.has(t)) status = 'deleted';
+    else if (have.has(t) || done.has(c.id)) status = 'done';
+    return { id: c.id, created_at: c.created_at, body: c.body, t, parsed, status };
+  });
 }
 
 /** 把本機與遠端的資料合併成一份。回傳合併結果與「本機／遠端是否需要更新」。 */
@@ -240,7 +269,7 @@ export async function syncOnce(state, client, now = Date.now(), opts = {}) {
     try {
       const comments = await client.listComments(gistId);
       inboxSeen = Array.isArray(comments) ? comments.length : 0;
-      inbox = inboxToSighs(comments, opts.reasons || [], original.deleted);
+      inbox = inboxToSighs(comments, opts.reasons || [], original.deleted, sync.processed || []);
     } catch (err) {
       inbox = [];
       inboxError = err && err.message ? err.message : String(err);
@@ -270,18 +299,22 @@ export async function syncOnce(state, client, now = Date.now(), opts = {}) {
   }
   if (remoteChanged) await client.updateGist(gistId, contentFor(merged, now));
 
-  // 留言已經變成紀錄了，清掉；失敗也沒關係，下次會因時間戳相同而不重複
+  // 留言已經變成紀錄了，清掉。刪不掉就記住 id，之後不會再收一次。
+  let deleteError = null;
+  const processed = new Set(sync.processed || []);
   for (const x of inbox) {
     try {
       await client.deleteComment(gistId, x.id);
-    } catch {
-      /* 忽略 */
+    } catch (err) {
+      deleteError = err && err.message ? err.message : String(err);
+      processed.add(x.id);
     }
   }
+  sync.processed = [...processed].slice(-200);
 
   sync.gistId = gistId;
   sync.lastSync = now;
   sync.force = false;
   const status = localChanged && remoteChanged ? 'both' : localChanged ? 'pulled' : remoteChanged ? 'pushed' : 'unchanged';
-  return { status, gistId, inbox: inbox.length, inboxSeen, inboxError, total: state.sighs.length };
+  return { status, gistId, inbox: inbox.length, inboxSeen, inboxError, deleteError, total: state.sighs.length };
 }
